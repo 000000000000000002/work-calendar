@@ -1,0 +1,1261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>上班日历 · 工时统计</title>
+<style>
+  /* ========== 1. 全局基础样式 ========== */
+  :root{
+    --bg:#f4f6fa;          /* 页面底色 */
+    --card:#ffffff;        /* 卡片底色 */
+    --line:#e5e8ef;        /* 分割线颜色 */
+    --text:#1f2733;        /* 主要文字颜色 */
+    --muted:#8a94a6;       /* 次要文字颜色 */
+    --primary:#2f6fed;     /* 主题色（蓝） */
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:20px;
+    background:var(--bg); color:var(--text);
+    font-family:"Microsoft YaHei","PingFang SC",system-ui,-apple-system,sans-serif;
+    font-size:14px; line-height:1.5;
+  }
+  .app{ max-width:1200px; margin:0 auto; }
+  .card{
+    background:var(--card); border:1px solid var(--line);
+    border-radius:12px; padding:14px 16px;
+  }
+  button{ font-family:inherit; font-size:13px; cursor:pointer; }
+
+  /* ========== 2. 顶部标题与工具栏 ========== */
+  .header{
+    display:flex; flex-wrap:wrap; gap:12px;
+    align-items:center; justify-content:space-between;
+    margin-bottom:14px;
+  }
+  .header h1{ font-size:19px; margin:0; }
+  .header h1 small{ font-size:12px; color:var(--muted); font-weight:normal; margin-left:8px; }
+  .toolbar{ display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .btn{
+    border:1px solid var(--line); background:#fff; color:var(--text);
+    border-radius:8px; padding:6px 12px; transition:.15s;
+  }
+  .btn:hover{ border-color:var(--primary); color:var(--primary); }
+  .btn.primary{ background:var(--primary); border-color:var(--primary); color:#fff; }
+  .btn.primary:hover{ opacity:.9; color:#fff; }
+  .btn.ghost{ color:var(--muted); }
+  /* 清空按钮：红色，和普通按钮区分，提醒"这是破坏性操作" */
+  .btn.danger{ border-color:#e03131; background:#fff; color:#e03131; }
+  .btn.danger:hover{ background:#e03131; color:#fff; }
+  .nav-group{ display:flex; align-items:center; gap:2px; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .nav-group button{ border:0; background:#fff; padding:6px 10px; color:var(--text); }
+  .nav-group button:hover{ background:#f0f3f9; color:var(--primary); }
+  .nav-group .current{ padding:6px 10px; font-weight:bold; min-width:110px; text-align:center; }
+
+  /* 【工资计算】工具栏里的“月薪”输入框 */
+  .salary-box{
+    display:flex; align-items:center; gap:5px;
+    font-size:13px; color:var(--muted);
+    border:1px solid var(--line); border-radius:8px; padding:4px 8px; background:#fff;
+  }
+  .salary-box input{
+    width:86px; border:0; outline:none; text-align:right;
+    font-family:inherit; font-size:13px; color:var(--text); background:transparent;
+  }
+
+  /* ========== 3. 主体两栏布局：左日历、右填写面板 ========== */
+  .main{ display:grid; grid-template-columns:minmax(0,1fr) 330px; gap:14px; align-items:start; }
+  @media (max-width:920px){ .main{ grid-template-columns:1fr; } }
+  /* 全年总览会把左侧拉得很高，所以让右侧填写面板“吸”在视口顶部，
+     这样滚动到 9~12 月时，点完日期依然能立刻看到右侧面板去填写。 */
+  .main > aside{ position:sticky; top:20px; }
+
+  /* ========== 4. 日历网格 ========== */
+  .weekdays, .grid{ display:grid; grid-template-columns:repeat(7,1fr); gap:6px; }
+  .weekdays{ margin-bottom:6px; }
+  .weekdays span{ text-align:center; font-size:12px; color:var(--muted); padding:4px 0; }
+  .weekdays span.weekend{ color:#e8590c; }
+
+  .cell{
+    position:relative; min-height:76px; padding:6px 7px;
+    border:1px solid var(--line); border-radius:8px; background:#fff;
+    cursor:pointer; overflow:hidden; transition:.12s;
+    /* 下面两个变量由 data-status 决定：--c 主色、--b 浅底色 */
+  }
+  .cell:hover{ transform:translateY(-1px); box-shadow:0 3px 8px rgba(0,0,0,.07); }
+  .cell.out{ background:#fafbfd; border-style:dashed; color:#c6ccd8; cursor:default; }
+  .cell.out:hover{ transform:none; box-shadow:none; }
+  .cell.today{ box-shadow:inset 0 0 0 2px var(--primary); }
+  .cell.selected{ outline:2px solid var(--primary); outline-offset:1px; }
+
+  /* 状态配色：同一天只用一种状态，直接通过 data-status 换色。
+     --c 是主色（文字/标签），--b 是浅底色（格子背景）。
+     月视图的 .cell 和年视图的 .mini-cell 共用这套变量。 */
+  .cell[data-status="work"],     .mini-cell[data-status="work"]     { --c:#2f6fed; --b:#eaf1ff; }
+  .cell[data-status="trip"],     .mini-cell[data-status="trip"]     { --c:#7048e8; --b:#f2edff; }
+  .cell[data-status="leave"],    .mini-cell[data-status="leave"]    { --c:#b07d00; --b:#fff8e1; }
+  .cell[data-status="adjust"],   .mini-cell[data-status="adjust"]   { --c:#0ca678; --b:#e8f8f1; }
+  .cell[data-status="holiday"],  .mini-cell[data-status="holiday"]  { --c:#e03131; --b:#ffecec; }
+  .cell[data-status="rest"],     .mini-cell[data-status="rest"]     { --c:#8a94a6; --b:#f4f5f8; }
+  .cell[data-status]:not(.out){ background:var(--b); border-color:var(--c); }
+  .mini-cell[data-status]{ background:var(--b); color:var(--c); font-weight:bold; }
+
+  /* 【新增】法定节假日当天却出勤（上班/加班）：换成醒目的“深玫红”，
+     好和平时蓝色的“上班”、橙色的“加班”一眼区分开。
+     注意：这条必须写在上面那些状态配色之后，两者选择器“特异性”相同，
+     靠“后来者覆盖”生效，写前面就不会起作用。 */
+  .cell[data-holiday-work], .mini-cell[data-holiday-work]{ --c:#c2255c; --b:#ffe3ee; }
+
+  .cell .c-top{ display:flex; align-items:center; justify-content:space-between; gap:4px; }
+  .cell .c-num{ font-size:13px; font-weight:bold; }
+  .cell .c-tag{
+    font-size:10px; line-height:1.4; padding:1px 5px; border-radius:5px;
+    color:#fff; background:var(--c,#98a1b3); white-space:nowrap;
+  }
+  .cell .c-sub{
+    margin-top:4px; font-size:10px; color:var(--muted);
+    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  }
+  .cell[data-status]:not(.out) .c-sub{ color:var(--c); opacity:.85; }
+  /* 单元格右上角小圆点：表示这天有加班时长 */
+  .cell .c-dot{
+    position:absolute; right:7px; bottom:6px; font-size:10px;
+    color:#e8590c; font-weight:bold;
+  }
+
+  /* ========== 5. 图例 ========== */
+  .legend{ display:flex; flex-wrap:wrap; gap:12px; margin-top:12px; font-size:12px; color:var(--muted); }
+  .legend i{
+    display:inline-block; width:10px; height:10px; border-radius:3px;
+    margin-right:4px; vertical-align:-1px;
+  }
+
+  /* ========== 6. 右侧填写面板 ========== */
+  .panel-title{ font-size:15px; font-weight:bold; margin-bottom:2px; }
+  .panel-sub{ font-size:12px; color:var(--muted); min-height:18px; margin-bottom:12px; }
+  .panel-sub b{ color:#e03131; }
+  /* 【新增】法定节假日提醒框：选中节假日时，在状态按钮上方给出醒目的玫红色提示 */
+  .holiday-tip{
+    background:#ffe3ee; border:1px solid #f3b6ce; color:#c2255c;
+    border-radius:8px; padding:7px 9px; font-size:12px; line-height:1.6;
+    margin-bottom:12px;
+  }
+  .holiday-tip b{ color:#a01b4d; }
+  /* “今天有加班”复选框那一行的样式：让勾选框和文字在同一行、垂直居中。
+     选择器写成 .field > label.ovt-label，是为了盖过上面 .field > label 的默认样式（特异性更高）。 */
+  .field > label.ovt-label{
+    display:flex; align-items:center; gap:6px;
+    font-size:13px; color:#4a5468; margin-bottom:0; cursor:pointer;
+  }
+  .field > label.ovt-label input{ width:15px; height:15px; accent-color:#e8590c; cursor:pointer; }
+  .field{ margin-bottom:14px; }
+  .field > label{ display:block; font-size:12px; color:var(--muted); margin-bottom:6px; }
+  .status-group{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  /* 状态按钮：每个按钮都带上自己状态的“底色”（浅色），文字和边框用同色系深色。
+     这两个变量由 renderPanel 按状态写进 style：--sc 深色、--sb 浅色底。
+     浅色底和图例里小色块、以及日历格子的底色是同一套颜色，看起来才统一。
+     选中的那个仍然用“实色底 + 白字”，和未选中的浅色底拉开区别。 */
+  .status-btn{
+    border:1px solid var(--sc, var(--line));
+    background:var(--sb, #fff);
+    color:var(--sc, #4a5468);
+    border-radius:8px; padding:6px 0; font-size:12px;
+  }
+  .status-btn:hover{ box-shadow:inset 0 0 0 1px var(--sc); }
+  .status-btn.active{ background:var(--sc); border-color:var(--sc); color:#fff; }
+  input[type="number"], textarea{
+    width:100%; border:1px solid var(--line); border-radius:8px;
+    padding:7px 9px; font-family:inherit; font-size:13px; color:var(--text);
+    background:#fff; outline:none; resize:vertical;
+  }
+  input[type="number"]:focus, textarea:focus{ border-color:var(--primary); }
+  .panel-actions{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .save-hint{ font-size:12px; color:#0ca678; opacity:0; transition:opacity .3s; }
+  .save-hint.show{ opacity:1; }
+  .empty-tip{ color:var(--muted); font-size:13px; text-align:center; padding:26px 0; }
+
+  /* ========== 7. 年视图（全年 12 个月总览） ========== */
+  /* 日历区只有约 830px 宽（右边留给填写面板），所以一行放 3 个小月份最舒服 */
+  .years{ display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }
+  @media (max-width:860px){ .years{ grid-template-columns:repeat(2,1fr); } }
+
+  .mini-month{ border:1px solid var(--line); border-radius:10px; padding:8px 9px; background:#fff; }
+  /* 月份标题：可点击，点了就跳到该月的月视图 */
+  .mini-month h3{
+    margin:0 0 6px; font-size:13px; font-weight:bold; text-align:center;
+    border-radius:6px; padding:3px 0; cursor:pointer; transition:.12s;
+  }
+  .mini-month h3:hover{ background:#eaf1ff; color:var(--primary); }
+
+  .mini-week, .mini-days{ display:grid; grid-template-columns:repeat(7,1fr); gap:2px; }
+  .mini-week span{ text-align:center; font-size:10px; color:var(--muted); }
+
+  /* 年视图里的“小格子”：只显示日期数字，颜色由 data-status 决定 */
+  .mini-cell{
+    position:relative; height:24px; border-radius:5px;
+    font-size:11px; color:#5a6478;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; transition:.12s;
+  }
+  .mini-cell:hover{ outline:1px solid var(--primary); }
+  .mini-cell.out{ visibility:hidden; cursor:default; } /* 非本月的格子占位但不可见，保证对齐 */
+  .mini-cell.today{ box-shadow:inset 0 0 0 2px var(--primary); }
+  .mini-cell.selected{ outline:2px solid var(--primary); font-weight:bold; }
+  /* 有写备注的日子右下角点一个小圆点，方便一眼看出“哪天填过内容” */
+  .mini-cell .mdot{
+    position:absolute; right:2px; bottom:2px;
+    width:4px; height:4px; border-radius:50%; background:currentColor;
+  }
+
+  /* ========== 8. 统计区 ========== */
+  .stats-title{ font-size:13px; font-weight:bold; margin:16px 0 8px; }
+  .stats{ display:grid; grid-template-columns:repeat(auto-fit,minmax(112px,1fr)); gap:10px; }
+  .stat{ background:#fff; border:1px solid var(--line); border-radius:10px; padding:9px 12px; }
+  .stat .k{ font-size:12px; color:var(--muted); }
+  .stat .v{ font-size:19px; font-weight:bold; margin-top:2px; }
+  .stat .v small{ font-size:11px; font-weight:normal; color:var(--muted); margin-left:2px; }
+
+  /* 【工资计算】统计卡片下方那行“工资明细”小字，横跨整行显示计算公式 */
+  .salary-note{
+    grid-column:1 / -1;
+    font-size:12px; color:var(--muted);
+    background:#fff; border:1px dashed var(--line); border-radius:10px; padding:8px 12px;
+  }
+  .salary-note b{ color:#0ca678; font-size:13px; }
+
+  /* ========== 9. 悬停提示卡片 ========== */
+  /* 鼠标停在某个日期格子上时，浮出这张卡片，把这天的工作情况完整列出来（备注不截断） */
+  .tip{
+    position:fixed; left:0; top:0; z-index:99; display:none;
+    max-width:300px; padding:9px 11px;
+    background:#fff; border:1px solid var(--line); border-radius:10px;
+    box-shadow:0 8px 24px rgba(0,0,0,.15);
+    font-size:12px; line-height:1.6; color:var(--text);
+    pointer-events:none;   /* 卡片不接收鼠标事件，否则一出现就会把格子“盖住”导致提示闪烁 */
+  }
+  .tip.show{ display:block; }
+  .tip .t-date{ font-size:13px; font-weight:bold; margin-bottom:4px; }
+  .tip .t-row{ color:#4a5468; }
+  .tip .t-row b{ color:var(--primary); }
+  .tip .t-hol{ color:#c2255c; }              /* 节假日出勤：用玫红提醒一下 */
+  .tip .t-note{
+    margin-top:7px; padding-top:7px; border-top:1px dashed var(--line);
+    white-space:pre-wrap; word-break:break-word;   /* 备注换行也原样显示，长文本自动折行 */
+  }
+  .tip .t-empty{ color:var(--muted); }
+
+  .footer{ margin-top:12px; font-size:12px; color:var(--muted); text-align:center; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ============ 顶部：标题 + 工具栏 ============ -->
+  <div class="header">
+    <h1>上班日历<small>工时统计 · 数据保存在本机浏览器</small></h1>
+    <div class="toolbar">
+      <div class="nav-group">
+        <button id="btnPrevYear" title="上一年">«</button>
+        <button id="btnPrevMonth" title="上一月">‹</button>
+        <span class="current" id="currentLabel"></span>
+        <button id="btnNextMonth" title="下一月">›</button>
+        <button id="btnNextYear" title="下一年">»</button>
+      </div>
+      <button class="btn primary" id="btnToday">今天</button>
+      <button class="btn" id="btnYearView" title="在“全年总览”和“单月视图”之间切换">全年总览</button>
+      <button class="btn" id="btnFillWorkdays" title="把今天及以前的普通工作日填成“上班”">填充工作日</button>
+      <span class="salary-box" title="填写月薪后，会在下方统计里算出“预计工资”">月薪
+        <input type="number" id="salaryInput" min="0" step="100" placeholder="0"> 元
+      </span>
+      <button class="btn" id="btnExport">导出备份</button>
+      <button class="btn" id="btnImport">导入备份</button>
+      <button class="btn danger" id="btnClearAll" title="⚠️ 清空本机所有记录和月薪（不可恢复）">清空我的数据</button>
+      <input type="file" id="fileInput" accept=".json" hidden>
+    </div>
+  </div>
+
+  <div class="main">
+    <!-- ============ 左侧：日历 ============ -->
+    <section class="card">
+      <!-- 日历容器：月视图和年视图二选一显示，点击事件统一挂在 #calendarArea 上 -->
+      <div id="calendarArea">
+
+        <!-- ===== 月视图（默认） ===== -->
+        <div id="monthView">
+          <div class="weekdays">
+            <span>周一</span><span>周二</span><span>周三</span><span>周四</span><span>周五</span>
+            <span class="weekend">周六</span><span class="weekend">周日</span>
+          </div>
+          <div class="grid" id="grid"></div>
+        </div>
+
+        <!-- ===== 年视图：全年 12 个月总览（点“全年总览”按钮后显示） ===== -->
+        <div id="yearView" hidden></div>
+      </div>
+
+      <div class="legend">
+        <span><i style="background:#2f6fed"></i>上班</span>
+        <span><i style="background:#e8590c"></i>加班（+小时）</span>
+        <span><i style="background:#7048e8"></i>出差</span>
+        <span><i style="background:#b07d00"></i>请假</span>
+        <span><i style="background:#0ca678"></i>调休</span>
+        <span><i style="background:#e03131"></i>法定休假</span>
+        <span><i style="background:#c2255c"></i>节日出勤</span>
+        <span><i style="background:#8a94a6"></i>休息</span>
+      </div>
+
+      <!-- 统计卡片：月视图显示本月统计，年视图显示全年统计 -->
+      <div class="stats-title" id="statsTitle"></div>
+      <div class="stats" id="stats"></div>
+    </section>
+
+    <!-- 悬停提示卡片：鼠标移到某个日期格子上时浮出，完整显示当天的工作情况（放在 script 之前，脚本才能取到它） -->
+    <div class="tip" id="tip"></div>
+
+    <!-- ============ 右侧：当天填写面板 ============ -->
+    <aside class="card">
+      <div id="panel"></div>
+    </aside>
+  </div>
+
+  <div class="footer">
+    法定节假日与调休安排依据《国务院办公厅关于2026年部分节假日安排的通知》（国办发明电〔2025〕7号）
+    <br>🔒 隐私说明：本页面不联网、不上传任何数据。你的记录只保存在本机浏览器里，作者无法查看。
+  </div>
+</div>
+
+<script>
+/* =========================================================================
+   上班日历 —— 全部逻辑说明
+   架构：单个 HTML 文件 + 浏览器 localStorage，无需后端、无需数据库。
+   数据格式：{ "2026-10-19": { status:"work", overtime:true, hours:3, note:"修线上bug" }, ... }
+   说明：status 是主状态（work/trip/leave/adjust/holiday/rest），
+        overtime 是独立的“加班”标记（true 表示这天有加班，可以和平常上班并存），hours 是加班时长。
+   ========================================================================= */
+
+/* -------------------------------------------------------------------------
+   第 1 部分：通用小工具函数
+   ------------------------------------------------------------------------- */
+
+// 数字补零：7 -> "07"（用于拼日期字符串）
+function pad2(n){ return String(n).padStart(2, '0'); }
+
+// "2026-10-19" -> Date 对象（注意：月份从 0 开始，所以要减 1）
+function parseDate(str){
+  const parts = str.split('-');
+  return new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
+}
+
+// Date 对象 -> "2026-10-19"（用本地时间取年月日，避免时区问题）
+function fmtDate(dt){
+  return dt.getFullYear() + '-' + pad2(dt.getMonth() + 1) + '-' + pad2(dt.getDate());
+}
+
+// 星期几的中文名：0=周日 ... 6=周六
+const WEEK_NAME = ['周日','周一','周二','周三','周四','周五','周六'];
+
+// 判断某个 "YYYY-MM-DD" 是星期几
+function weekdayOf(dateStr){ return parseDate(dateStr).getDay(); }
+
+// 是否为周末（周六或周日）
+function isWeekend(dateStr){
+  const w = weekdayOf(dateStr);
+  return w === 0 || w === 6;
+}
+
+/* -------------------------------------------------------------------------
+   第 2 部分：状态定义（一天只能有一种“主状态”）
+   key 是存进 localStorage 的英文标识；label 是界面上显示的中文。
+   color 用于按钮高亮，CSS 里也按 data-status 给了对应的配色。
+   【重要改动】“加班”不再是一种和“上班”互斥的状态，而是独立的一个标记
+   （记录里的 rec.overtime = true）。这样同一天既可以“上班”，又可以有“加班”，
+   所以下面的 STATUS / STATUS_ORDER 里已经没有 overtime 了。
+   ------------------------------------------------------------------------- */
+const STATUS = {
+  work:     { key:'work',     label:'上班',     color:'#2f6fed', bg:'#eaf1ff' },
+  trip:     { key:'trip',     label:'出差',     color:'#7048e8', bg:'#f2edff' },
+  leave:    { key:'leave',    label:'请假',     color:'#b07d00', bg:'#fff8e1' },
+  adjust:   { key:'adjust',   label:'调休',     color:'#0ca678', bg:'#e8f8f1' },
+  holiday:  { key:'holiday',  label:'法定休假', color:'#e03131', bg:'#ffecec' },
+  rest:     { key:'rest',     label:'休息',     color:'#8a94a6', bg:'#f4f5f8' }
+};
+// 面板上状态按钮的显示顺序（“加班”已挪到下面的复选框，不再出现在这里）
+const STATUS_ORDER = ['work','trip','leave','adjust','holiday','rest'];
+
+/* =========================================================================
+   ★★★ 每年更新区：法定节假日数据 ★★★
+   -------------------------------------------------------------------------
+   【什么时候更新】每年 10~11 月，国务院办公厅会发布
+       《关于XXXX年部分节假日安排的通知》，看到后更新一次即可。
+
+   【数据从哪来】中国政府网 www.gov.cn 搜索“节假日安排”，
+       或直接在国务院客户端查看官方通知，以官方文件为准。
+
+   【怎么更新】照下面的格式，在 OFFICIAL 里加一条新年份即可，
+       其他代码一行都不用动：
+
+       '2027': {
+         holidays: [   // 放假区间：起始日 ~ 结束日（含首尾两天）
+           { name:'元旦', from:'2027-01-01', to:'2027-01-03' },
+           { name:'春节', from:'2027-02-XX', to:'2027-02-XX' },
+           ...
+         ],
+         makeupWorkdays: [  // 调休补班日：通知里写“X月X日（周六/日）上班”的那些
+           '2027-01-XX', '2027-02-XX'
+         ]
+       },
+
+   【注意事项】
+     1. 日期必须是 'YYYY-MM-DD' 格式，月份和日期不足两位要补零；
+     2. 放假区间要“含首尾”，比如放 10/1~10/7 就写 from:'10-01', to:'10-07'；
+     3. makeupWorkdays 只填“本来是周末但被调成上班”的日子；
+        通知里“调休放假”的工作日不用管——它已经包含在 holidays 区间里了；
+     4. 改错也没关系：程序不会崩，只是那几天颜色不对，改回来保存即可；
+     5. 旧年份的数据不用删，留着不影响任何东西（还能回看历史）。
+   ========================================================================= */
+const OFFICIAL = {
+  // ===== 2026 年（依据：国办发明电〔2025〕7号）=====
+  '2026': {
+    holidays: [   // 放假区间：起始日 ~ 结束日（含首尾）
+      { name:'元旦',   from:'2026-01-01', to:'2026-01-03' },
+      { name:'春节',   from:'2026-02-15', to:'2026-02-23' },
+      { name:'清明节', from:'2026-04-04', to:'2026-04-06' },
+      { name:'劳动节', from:'2026-05-01', to:'2026-05-05' },
+      { name:'端午节', from:'2026-06-19', to:'2026-06-21' },
+      { name:'中秋节', from:'2026-09-25', to:'2026-09-27' },
+      { name:'国庆节', from:'2026-10-01', to:'2026-10-07' }
+    ],
+    makeupWorkdays: [  // 调休补班日（本来是周末，但要上班）
+      '2026-01-04', '2026-02-14', '2026-02-28',
+      '2026-05-09', '2026-09-20', '2026-10-10'
+    ]
+  }
+
+  // ===== 2027 年 =====
+  // 等国办通知发布后，把下面这段注释解开、填上日期即可：
+  // ,
+  // '2027': {
+  //   holidays: [
+  //     { name:'元旦', from:'2027-01-01', to:'2027-01-XX' },
+  //     ...
+  //   ],
+  //   makeupWorkdays: [ '2027-XX-XX', ... ]
+  // }
+};
+
+// 把上面的“区间”展开成具体日期，方便按天查询
+const holidayMap = {};        // { "2026-10-01": "国庆节", ... }
+const makeupWorkSet = new Set(); // 调休补班日集合，用 Set 查询更快
+
+Object.keys(OFFICIAL).forEach(function(year){
+  const cfg = OFFICIAL[year];
+  // 展开每一个放假区间
+  cfg.holidays.forEach(function(h){
+    const cur = parseDate(h.from);      // 当前遍历到的日期
+    const end = parseDate(h.to);        // 区间结束日期
+    while (cur <= end){
+      holidayMap[fmtDate(cur)] = h.name; // 记录这一天属于哪个节日
+      cur.setDate(cur.getDate() + 1);    // 日期 +1 天，继续循环
+    }
+  });
+  // 记录调休补班日
+  cfg.makeupWorkdays.forEach(function(d){ makeupWorkSet.add(d); });
+});
+
+/* -------------------------------------------------------------------------
+   第 4 部分：全局状态
+   ------------------------------------------------------------------------- */
+const STORAGE_KEY = 'work-calendar-records-v1'; // localStorage 的键名，改键名可隔离不同数据
+const SALARY_KEY  = 'work-calendar-salary-v1';  // 【工资计算】月薪单独用一个键存
+
+let records = loadRecords();       // 所有已填写的记录
+let monthlySalary = loadSalary();  // 【工资计算】用户填的月薪（元），0 表示还没填
+const todayStr = fmtDate(new Date()); // 今天，如 "2026-10-19"
+let view = {                  // 当前日历显示的年份 / 月份
+  year: new Date().getFullYear(),
+  month: new Date().getMonth() // 0 = 一月
+};
+let viewMode = 'month';       // 视图模式：'month' 单月视图 / 'year' 全年 12 个月总览
+let selectedDate = null;      // 用户在面板中正在编辑的日期
+
+// 从 localStorage 读取记录（出错时回退为空对象，避免页面崩掉）
+function loadRecords(){
+  try{
+    const raw = localStorage.getItem(STORAGE_KEY);
+    const data = raw ? JSON.parse(raw) : {};
+    // 【兼容旧数据·迁移】以前“加班”是一种独立状态（rec.status === 'overtime'）。
+    // 现在“加班”改成了可以和平常上班同时存在的标记（rec.overtime = true），
+    // 所以这里把老记录自动改写成 { status:'work', overtime:true }，旧数据一条都不会丢。
+    Object.keys(data).forEach(function(ds){
+      const rec = data[ds];
+      if (rec && rec.status === 'overtime'){
+        rec.status = 'work';    // 主状态退回“上班”
+        rec.overtime = true;    // 同时打上“这天有加班”的标记
+      }
+    });
+    return data;
+  }catch(e){
+    console.warn('读取本地数据失败，已重置：', e);
+    return {};
+  }
+}
+
+// 把记录写回 localStorage
+function saveRecords(){
+  try{
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+  }catch(e){
+    alert('保存失败：浏览器本地存储不可用或被禁用。');
+  }
+}
+
+/* 【工资计算】相关的两个小函数 + 金额格式化 */
+
+// 读月薪：没填过或值不合法就返回 0（0 表示“不计算工资”）
+function loadSalary(){
+  try{
+    const v = Number(localStorage.getItem(SALARY_KEY));
+    return (isFinite(v) && v > 0) ? v : 0;
+  }catch(e){ return 0; }
+}
+
+// 存月薪
+function saveSalary(){
+  try{ localStorage.setItem(SALARY_KEY, String(monthlySalary)); }catch(e){}
+}
+
+// 金额格式化：最多保留两位小数，整数就不显示小数点（如 12222.22、5000）
+function fmtMoney(n){
+  const v = Math.round(n * 100) / 100;
+  return (Math.abs(v - Math.round(v)) < 1e-9) ? String(Math.round(v)) : v.toFixed(2);
+}
+
+/* -------------------------------------------------------------------------
+   第 5 部分：某一天的“默认状态”
+   说明：法定节假日/周末/调休补班日会被自动标注，普通工作日保持空白，等用户填写。
+   ------------------------------------------------------------------------- */
+function autoStatusOf(dateStr){
+  if (holidayMap[dateStr]) return 'holiday';        // 法定放假
+  if (makeupWorkSet.has(dateStr)) return 'work';    // 调休补班日，默认按上班算
+  if (isWeekend(dateStr)) return 'rest';            // 普通周末休息
+  return null;                                      // 普通工作日：未填写
+}
+
+// 判断某天是不是“法定节假日”（holidayMap 里存了节日名，如 "2026-10-01": "国庆节"）
+// 【新增】供日历、面板、统计三处共用，避免到处重复写 !!holidayMap[...]
+function isLegalHoliday(dateStr){ return !!holidayMap[dateStr]; }
+
+// 判断某天是不是“应出勤的工作日”：法定放假日不算；调休补班日算；普通周一~周五算。
+// 【新增】把这段判断抽成一个函数，统计里算“应出勤”和“出勤率分子”时共用，避免两处写两份逻辑。
+function isRequiredWorkday(dateStr){
+  if (holidayMap[dateStr]) return false;             // 法定节假日不上班
+  if (makeupWorkSet.has(dateStr)) return true;       // 调休补班日（本是周末但要上班）
+  const w = weekdayOf(dateStr);
+  return w >= 1 && w <= 5;                           // 普通周一(1)~周五(5)
+}
+
+// 判断某天有没有“加班”（【新增】加班现在是独立标记，存在 rec.overtime 里，而不是 status 里）
+function isOvertime(dateStr){
+  const rec = records[dateStr];
+  return !!(rec && rec.overtime);
+}
+
+// 取某天最终生效的状态：用户填写优先，其次才是自动状态
+function effectiveStatusOf(dateStr){
+  const rec = records[dateStr];
+  if (rec && rec.status) return rec.status;
+  return autoStatusOf(dateStr);
+}
+
+// 取某天的显示说明文字：用户备注优先，其次显示节日名/调休提示
+function subtitleOf(dateStr){
+  const rec = records[dateStr];
+  if (rec && rec.note) return rec.note;
+  if (holidayMap[dateStr]) return holidayMap[dateStr];
+  if (makeupWorkSet.has(dateStr)) return '调休补班';
+  return '';
+}
+
+/* =========================================================================
+   第 6 部分：渲染日历（月视图 + 年视图）
+   两个视图共用下面的 buildGridHtml()：它负责生成“某一个月的格子 HTML”。
+     compact = false -> 月视图：大格子，显示状态标签、备注、加班时长
+     compact = true  -> 年视图：小格子，只显示日期数字，用底色区分状态
+   ========================================================================= */
+
+// 生成某个月份的格子 HTML。y = 年，m = 月（0-based），compact = 是否用小格子
+function buildGridHtml(y, m, compact){
+  const firstDay = new Date(y, m, 1);                   // 本月 1 号
+  const daysInMonth = new Date(y, m + 1, 0).getDate();  // 本月总天数
+
+  // 表头从周一开始，所以要把「周日=0」换算成「周一=0」
+  const leading = (firstDay.getDay() + 6) % 7;                   // 1 号前面要补几个空格子
+  const totalCells = Math.ceil((leading + daysInMonth) / 7) * 7; // 总格子数，凑满整行
+  const baseCls = compact ? 'mini-cell' : 'cell';                // 两种视图用不同的格子类名
+
+  let html = '';
+  for (let i = 0; i < totalCells; i++){
+    // 格子序号换算成日期：i - leading 就是“本月几号”
+    const dayOffset = i - leading;
+    const dt = new Date(y, m, dayOffset + 1);
+    const ds = fmtDate(dt);
+    const inMonth = dayOffset >= 0 && dayOffset < daysInMonth;
+
+    if (!inMonth){
+      // 非本月的格子：月视图显示淡淡的日期数字；年视图直接隐藏占位（保证每行 7 格对齐）
+      html += compact
+        ? '<div class="mini-cell out"></div>'
+        : '<div class="cell out"><div class="c-top"><span class="c-num">' + dt.getDate() + '</span></div></div>';
+      continue;
+    }
+
+    const st = effectiveStatusOf(ds);   // 这天最终状态（可能为 null，表示还没填写）
+    const rec = records[ds] || {};
+    const cls = [baseCls];
+    if (ds === todayStr) cls.push('today');        // 今天：加一圈边框
+    if (ds === selectedDate) cls.push('selected'); // 当前正在编辑的那天：加选中框
+
+    // 【判断“节假日出勤”这个特殊情况】：
+    //   isHol   = 这天是法定节假日（如 10/1~10/7 国庆节）
+    //   ovt     = 这天勾了“今天有加班”（独立标记，可以和平常上班并存）
+    //   holWork = 节假日这天却出了勤（主状态是上班/出差，或者勾了加班）
+    const isHol = isLegalHoliday(ds);
+    const ovt = isOvertime(ds);
+    const holWork = isHol && (st === 'work' || st === 'trip' || ovt);
+
+    // 标签文字：
+    //   - 法定休假（当天没出勤）：显示节日名，如“国庆节”
+    //   - 节假日却出勤：显示“节日名·上班/加班”，如“国庆节·加班”，一眼看出是节日加班
+    //   - 平时有加班：主状态名后面追加“·加班”，如“上班·加班”
+    //   - 其余情况：只显示主状态中文名（上班 / 出差 / 请假 / 调休 / 休息）
+    let tag = '';
+    if (holWork)              tag = holidayMap[ds] + '·' + (ovt ? '加班' : '上班');     // 国庆节·加班
+    else if (st === 'holiday') tag = holidayMap[ds] || STATUS.holiday.label;           // 国庆节 / 法定休假
+    else if (st)               tag = STATUS[st].label + (ovt ? '·加班' : '');          // 上班·加班
+    else if (ovt)              tag = '加班';                                            // 没填主状态但勾了加班
+
+    // 【悬停提示】不用浏览器自带的 title 了，改成鼠标移上去浮出一张自定义卡片
+    // （见 buildTipHtml / bindHoverTip），这样备注再长也能看全，样式也统一。
+    const statusAttr = st ? ' data-status="' + st + '"' : ''; // 状态存在时，颜色由 CSS 按它来决定
+    // 【新增】节假日出勤时，多打一个标记属性；CSS 一看到它就把格子换成醒目的玫红色。
+    // 月视图、年视图都会带上它，所以两个视图的颜色能保持一致。
+    const holAttr = holWork ? ' data-holiday-work="1"' : '';
+
+    // ---------- 年视图的小格子：只放日期数字 ----------
+    if (compact){
+      const hasNote = !!(rec.note && rec.note.trim());
+      html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr
+            + '>' + dt.getDate()
+            + (hasNote ? '<span class="mdot"></span>' : '') // 写过备注的日子点一个小圆点
+            + '</div>';
+      continue;
+    }
+
+    // ---------- 月视图的大格子：日期 + 状态标签 + 备注 + 加班时长 ----------
+    const sub = subtitleOf(ds);   // 备注 / 节日名 / 调休提示
+    const dot = (ovt && rec.hours) ? ('+' + rec.hours + 'h') : '';
+
+    html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr + '>'
+          +   '<div class="c-top">'
+          +     '<span class="c-num">' + dt.getDate() + '</span>'
+          +     (tag ? '<span class="c-tag">' + tag + '</span>' : '')
+          +   '</div>'
+          +   (sub ? '<div class="c-sub">' + escapeHtml(sub) + '</div>' : '')
+          +   (dot ? '<div class="c-dot">' + dot + '</div>' : '')
+          + '</div>';
+  }
+  return html;
+}
+
+// 渲染月视图（一个大月份的日历）
+function renderMonthView(){
+  document.getElementById('grid').innerHTML = buildGridHtml(view.year, view.month, false);
+  updateHeaderLabel();
+}
+
+// 渲染年视图（12 个小月份总览，每个月份标题都能点击跳转）
+function renderYearView(){
+  const y = view.year;
+  // 小月份上面的“一 二 三 四 五 六 日”表头
+  const weekHead = ['一','二','三','四','五','六','日']
+    .map(function(w){ return '<span>' + w + '</span>'; }).join('');
+
+  let html = '<div class="years">';
+  for (let m = 0; m < 12; m++){
+    html += '<div class="mini-month">'
+          +   '<h3 data-goto-month="' + m + '" title="点击查看 ' + (m + 1) + ' 月月视图">'
+          +     (m + 1) + ' 月</h3>'
+          +   '<div class="mini-week">' + weekHead + '</div>'
+          +   '<div class="mini-days">' + buildGridHtml(y, m, true) + '</div>'
+          + '</div>';
+  }
+  html += '</div>';
+
+  document.getElementById('yearView').innerHTML = html;
+  updateHeaderLabel();
+}
+
+// 顶部标题：月视图显示“2026 年 10 月”，年视图显示“2026 年 全年总览”
+function updateHeaderLabel(){
+  document.getElementById('currentLabel').textContent =
+    viewMode === 'month'
+      ? view.year + ' 年 ' + pad2(view.month + 1) + ' 月'
+      : view.year + ' 年 全年总览';
+}
+
+// 只刷新“日期格子”，不重建右侧面板（避免用户正在打字时输入框失去焦点）
+function refreshDayCells(){
+  if (viewMode === 'month') renderMonthView();
+  else renderYearView();
+}
+
+// 把用户输入的文字做转义，防止备注里带 < > 时破坏页面结构
+function escapeHtml(str){
+  return String(str).replace(/[&<>"']/g, function(c){
+    return { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c];
+  });
+}
+
+/* -------------------------------------------------------------------------
+   第 7 部分：渲染右侧填写面板
+   ------------------------------------------------------------------------- */
+function renderPanel(){
+  const panel = document.getElementById('panel');
+
+  // 没选中日期时，给个引导提示
+  if (!selectedDate){
+    panel.innerHTML = '<div class="empty-tip">点击日历中的任意一天<br>即可填写当天的工作情况</div>';
+    return;
+  }
+
+  const rec = records[selectedDate] || {};
+  const st = effectiveStatusOf(selectedDate);
+  const dt = parseDate(selectedDate);
+
+  // 副标题：节日 / 调休 / 周末提示
+  let subText = '';
+  if (holidayMap[selectedDate]) subText = '<b>法定节假日：' + holidayMap[selectedDate] + '</b>';
+  else if (makeupWorkSet.has(selectedDate)) subText = '<b>调休补班日</b>（本应休息，需上班）';
+  else if (isWeekend(selectedDate)) subText = '周末';
+
+  // 法定节假日提醒框：选中节假日时，在状态按钮上方插一条醒目的玫红提示，
+  // 提醒用户“这天出勤算加班”，要勾选「今天有加班」把它和平时上班区分开。
+  let holidayTip = '';
+  if (isLegalHoliday(selectedDate)){
+    holidayTip = '<div class="holiday-tip">'
+      + '<b>' + selectedDate + ' 是法定节假日（' + holidayMap[selectedDate] + '）</b><br>'
+      + '这天出勤属于「节假日加班」，请选<b>上班</b>并勾选下面的<b>「今天有加班」</b>，与平时区分开。'
+      + '</div>';
+  }
+
+  // 状态按钮：当前生效的那个高亮（“加班”已不在这里，改到下面的复选框）
+  let btns = '';
+  STATUS_ORDER.forEach(function(k){
+    const s = STATUS[k];
+    const active = (st === k) ? ' active' : '';
+    btns += '<button class="status-btn' + active + '" data-set="' + k + '"'
+          + ' style="--sc:' + s.color + ';--sb:' + s.bg + '">' + s.label + '</button>';
+  });
+
+  // 【新增】“今天有加班”复选框：加班现在是独立标记，勾选后主状态仍在，
+  // 于是同一天可以既“上班”又“加班”。勾上才显示下面的时长输入框。
+  const ovt = !!rec.overtime;
+
+  panel.innerHTML =
+      '<div class="panel-title">' + selectedDate + ' ' + WEEK_NAME[weekdayOf(selectedDate)] + '</div>'
+    + '<div class="panel-sub">' + subText + '</div>'
+    + holidayTip
+    + '<div class="field"><label>当天状态</label><div class="status-group">' + btns + '</div></div>'
+    + '<div class="field">'
+    +   '<label class="ovt-label">'
+    +     '<input type="checkbox" id="overtimeCheck"' + (ovt ? ' checked' : '') + '>今天有加班'
+    +   '</label>'
+    +   '<div id="hoursField" style="display:' + (ovt ? 'block' : 'none') + ';margin-top:8px">'
+    +     '<label>加班时长（小时）</label>'
+    +     '<input type="number" id="hoursInput" min="0" max="24" step="0.5" value="' + (rec.hours || '') + '">'
+    +   '</div>'
+    + '</div>'
+    + '<div class="field"><label>工作情况 / 备注</label>'
+    +   '<textarea id="noteInput" rows="5" placeholder="例如：完成接口联调；晚上处理线上问题到 21:00">'
+    +     escapeHtml(rec.note || '') + '</textarea></div>'
+    + '<div class="panel-actions">'
+    +   '<button class="btn ghost" id="btnClear">清除当天记录</button>'
+    +   '<span class="save-hint" id="saveHint">已保存</span>'
+    + '</div>';
+
+  bindPanelEvents();
+}
+
+// 给面板里的控件绑定事件（每次重建面板后都要重新绑定）
+function bindPanelEvents(){
+  // 1) 状态按钮：点击即写入主状态（只改 status，不动加班标记）
+  document.querySelectorAll('.status-btn').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      updateRecord(currentDate(), { status: btn.dataset.set });
+      renderAll();
+    });
+  });
+
+  // 2) 【新增】“今天有加班”复选框：勾上/取消 → 写入 overtime 标记。
+  //    勾上：overtime=true；取消：overtime=false 并把时长清零，避免残留时长被统计进去。
+  //    因为要显示/隐藏时长输入框，所以这里整页重绘（面板会重建）。
+  const ovtCheck = document.getElementById('overtimeCheck');
+  if (ovtCheck){
+    ovtCheck.addEventListener('change', function(){
+      updateRecord(currentDate(), ovtCheck.checked ? { overtime: true } : { overtime: false, hours: 0 });
+      renderAll();
+    });
+  }
+
+  // 3) 加班时长输入框（只有勾了“今天有加班”才会显示）
+  const hoursInput = document.getElementById('hoursInput');
+  if (hoursInput){
+    hoursInput.addEventListener('input', function(){
+      const v = Math.max(0, Math.min(24, Number(hoursInput.value) || 0));
+      updateRecord(currentDate(), { hours: v });
+      showSavedHint();     // 这里不整页重绘，避免输入焦点丢失
+      renderStats();       // 但统计数字要跟着变
+      refreshDayCells();   // 格子上的“+Xh”小字也要跟着变
+    });
+  }
+
+  // 4) 备注文本框：边输入边保存（localStorage 写入很快，不必担心性能）
+  const noteInput = document.getElementById('noteInput');
+  noteInput.addEventListener('input', function(){
+    updateRecord(currentDate(), { note: noteInput.value });
+    showSavedHint();
+    refreshDayCells();   // 让格子上的状态 / 备注同步更新（月视图、年视图都支持）
+  });
+
+  // 5) 清除当天记录
+  document.getElementById('btnClear').addEventListener('click', function(){
+    if (!records[currentDate()]) return;
+    delete records[currentDate()];
+    saveRecords();
+    renderAll();
+  });
+}
+
+// 面板当前编辑的日期（写成一个函数，语义更清楚）
+function currentDate(){ return selectedDate; }
+
+// 修改某天的记录：只改传入的字段，其它字段保持不变
+function updateRecord(dateStr, patch){
+  const rec = records[dateStr] || {};
+  Object.keys(patch).forEach(function(k){ rec[k] = patch[k]; });
+  records[dateStr] = rec;
+  saveRecords();
+}
+
+// 短暂显示“已保存”提示
+function showSavedHint(){
+  const hint = document.getElementById('saveHint');
+  if (!hint) return;
+  hint.classList.add('show');
+  clearTimeout(showSavedHint._timer);
+  showSavedHint._timer = setTimeout(function(){ hint.classList.remove('show'); }, 900);
+}
+
+/* =========================================================================
+   第 8 部分：统计
+   统计逻辑写成“按日期区间算”，这样月视图传一个月的区间、年视图传整年的区间，
+   同一套代码就能算出两种口径的数字，不用写两份。
+   ========================================================================= */
+
+// 统计 [startDate, endDate] 区间内的出勤情况（含首尾两天）
+function computeStats(startDate, endDate){
+  // 各主状态计数器（“加班”不在这里，它现在是独立标记 overtime）
+  const cnt = { work:0, trip:0, leave:0, adjust:0, holiday:0, rest:0, empty:0 };
+  let overtimeHours = 0;      // 加班时长合计
+  let overtimeDays = 0;       // 加班天数（勾了“今天有加班”的天数）
+  let requiredDays = 0;       // 应出勤工作日：区间内“到今天为止已经过去”的工作日天数
+  let workedRequiredDays = 0; // 应出勤工作日里“实际出了勤”的天数（算出勤率用）
+  let holidayAttendDays = 0;  // 法定节假日里仍然出勤的天数
+  let attendDays = 0;         // 实际出勤（主状态是上班/出差，或这天有加班）
+
+  // 【动态应出勤的关键】“今天”的 Date 对象（0 点整）。
+  // 下面用 cur <= today 判断某一天是不是“已经过去了”，决定它要不要计入应出勤。
+  const today = parseDate(todayStr);
+
+  const cur = new Date(startDate);   // 从起始日开始逐天往后走
+  while (cur <= endDate){
+    const ds = fmtDate(cur);
+    const st = effectiveStatusOf(ds);
+    const rec = records[ds] || {};
+    const ovt = !!(rec && rec.overtime);  // 这天有没有勾“今天有加班”
+
+    const mustWork = isRequiredWorkday(ds); // 这天“本该出勤”吗（法定假除外、调休补班算、周一~周五算）
+    const past = (cur <= today);            // 这天是不是“今天及以前”（未来还没到的日子为 false）
+    const attend = (st === 'work' || st === 'trip' || ovt); // 这天算不算“出勤”？
+
+    // 【动态】只把“今天及以前”的应出勤工作日计入分母：
+    // 未来的工作日还没到，如果也算进去，出勤率会显得虚低（比如 10 月才过半就按整月算）。
+    if (past && mustWork) requiredDays++;
+
+    if (st && cnt[st] !== undefined) cnt[st]++;
+    else cnt.empty++;
+
+    // 加班：天数 + 时长（现在改成看 rec.overtime 标记，和主状态无关，可以和平常上班并存）
+    if (ovt){
+      overtimeDays++;
+      overtimeHours += Number(rec.hours) || 0;
+    }
+
+    // 法定节假日却出勤：单独记一笔，这样统计里能把“节假日加班”和平时的出勤区分开。
+    if (holidayMap[ds] && attend) holidayAttendDays++;
+
+    // 出勤率的分子：只在“应出勤的工作日”里数实际出勤。
+    // 节假日的加班不计入这里，免得出勤率被顶到 100% 以上（那是额外出勤，不算“应出勤的完成度”）。
+    if (past && mustWork && attend) workedRequiredDays++;
+
+    if (attend) attendDays++;
+
+    cur.setDate(cur.getDate() + 1);   // 日期 +1 天，继续循环
+  }
+
+  return {
+    cnt: cnt,
+    overtimeHours: overtimeHours,     // 加班时长合计
+    overtimeDays: overtimeDays,       // 加班天数
+    requiredDays: requiredDays,       // 【动态】只算到今天
+    workedRequiredDays: workedRequiredDays,
+    holidayAttendDays: holidayAttendDays,
+    attendDays: attendDays,
+    rate: requiredDays ? Math.round(workedRequiredDays / requiredDays * 100) : 0
+  };
+}
+
+// 渲染统计卡片：月视图统计本月，年视图统计全年
+function renderStats(){
+  let stat, title;
+  if (viewMode === 'month'){
+    const y = view.year, m = view.month;
+    stat = computeStats(new Date(y, m, 1), new Date(y, m + 1, 0)); // 本月 1 号 ~ 本月最后一天
+    title = y + ' 年 ' + pad2(m + 1) + ' 月统计';
+  } else {
+    stat = computeStats(new Date(view.year, 0, 1), new Date(view.year, 11, 31)); // 1 月 1 日 ~ 12 月 31 日
+    title = view.year + ' 年全年统计';
+  }
+
+  // 【动态应出勤的提示】判断统计区间是不是“还没过完”：
+  // 区间结束日 > 今天 => 还有没到的日子，此时应出勤只算到今天，卡片上标注“（截至今天）”。
+  // 看历史月份/年份（区间已全部过去）时，就用普通“天”，数字等于完整区间。
+  const rangeEnd = (viewMode === 'month')
+      ? new Date(view.year, view.month + 1, 0)  // 本月最后一天
+      : new Date(view.year, 11, 31);            // 本年 12 月 31 日
+  const capped = rangeEnd > new Date();
+
+  const cnt = stat.cnt;
+
+  // 【工资计算】预计工资 = 月薪 ÷ 应出勤天数 × 实际出勤天数。
+  // 只在“月视图 + 已填月薪 + 应出勤天数不为 0”时才计算（避免除以 0）；
+  // 年视图里的“应出勤”是全年天数，拿月薪套这个公式没有意义，所以年视图不显示工资卡。
+  let salaryItem = null;
+  let salaryNote = '';
+  if (viewMode === 'month' && monthlySalary > 0 && stat.requiredDays > 0){
+    const pay = monthlySalary / stat.requiredDays * stat.attendDays; // 预计工资
+    salaryItem = { k:'预计工资', v: fmtMoney(pay), u:'元' };
+    salaryNote = '<div class="salary-note">工资明细：月薪 ' + fmtMoney(monthlySalary)
+               + ' 元 ÷ 应出勤 ' + stat.requiredDays + ' 天 × 实际出勤 ' + stat.attendDays
+               + ' 天 = <b>' + fmtMoney(pay) + ' 元</b></div>';
+  }
+
+  const items = [
+    { k:'应出勤工作日', v:stat.requiredDays,  u: capped ? '天（截至今天）' : '天' },
+    { k:'实际出勤',     v:stat.attendDays,    u:'天' },
+    { k:'出勤率',       v:stat.rate,          u:'%'  },
+    { k:'加班',         v:stat.overtimeDays,  u:'天' },
+    { k:'加班时长',     v:stat.overtimeHours, u:'小时' },
+    { k:'法定假日加班', v:stat.holidayAttendDays, u:'天' },
+    { k:'出差',         v:cnt.trip,           u:'天' },
+    { k:'请假',         v:cnt.leave,          u:'天' },
+    { k:'法定休假',     v:cnt.holiday,        u:'天' },
+    { k:'休息',         v:cnt.rest,           u:'天' },
+    { k:'未填写',       v:cnt.empty,          u:'天' }
+  ];
+  if (salaryItem) items.splice(3, 0, salaryItem); // 把“预计工资”插在“出勤率”后面
+
+  document.getElementById('statsTitle').textContent = title;
+  document.getElementById('stats').innerHTML = items.map(function(it){
+    return '<div class="stat"><div class="k">' + it.k + '</div>'
+         + '<div class="v">' + it.v + '<small>' + it.u + '</small></div></div>';
+  }).join('') + salaryNote;
+}
+
+/* -------------------------------------------------------------------------
+   第 9 部分：整体刷新（视图切换 + 日历 + 面板 + 统计）
+   ------------------------------------------------------------------------- */
+function renderAll(){
+  // 1) 月视图和年视图二选一显示：hidden 属性的 true / false 决定谁被藏起来
+  document.getElementById('monthView').hidden = (viewMode !== 'month');
+  document.getElementById('yearView').hidden  = (viewMode !== 'year');
+
+  // 2) 按钮上的文字跟着当前视图变，让用户知道点了会发生什么
+  document.getElementById('btnYearView').textContent =
+    (viewMode === 'month') ? '全年总览' : '回到月视图';
+  document.getElementById('btnFillWorkdays').title =
+    (viewMode === 'month') ? '把本月今天及以前的普通工作日填成“上班”' : '把今年今天及以前的普通工作日填成“上班”';
+
+  // 3) 渲染三块内容：日期格子、右侧填写面板、底部统计
+  refreshDayCells();
+  renderPanel();
+  renderStats();
+}
+
+/* -------------------------------------------------------------------------
+   第 10 部分：事件绑定 —— 月份切换、点击日期、填充、导入导出
+   ------------------------------------------------------------------------- */
+
+// 切换月份：月份为 -1 或 12 时要正确跨年；如果当前在年视图，按 ‹› 会顺势回到月视图
+function changeMonth(delta){
+  const d = new Date(view.year, view.month + delta, 1);
+  view.year = d.getFullYear();
+  view.month = d.getMonth();
+  viewMode = 'month';   // 从年视图切月份时，直接进入月视图，方便看细节
+  renderAll();
+}
+
+// 切换年份：月视图 / 年视图都生效
+function changeYear(delta){
+  view.year += delta;
+  renderAll();
+}
+
+// 从年视图跳进某个月的月视图（点击小月份上方的“X 月”标题时调用）
+function gotoMonth(m){
+  view.month = m;
+  viewMode = 'month';
+  renderAll();
+}
+
+// 点击日历：事件统一挂在 #calendarArea 上，所以月视图和年视图共用这一套逻辑
+document.getElementById('calendarArea').addEventListener('click', function(e){
+  // 情况 1：点到年视图里的“X 月”标题 -> 跳到那个月的月视图
+  const head = e.target.closest('[data-goto-month]');
+  if (head){ gotoMonth(Number(head.dataset.gotoMonth)); return; }
+
+  // 情况 2：点到日期格子 -> 选中这一天，右侧面板就能填写（月视图、年视图都支持）
+  const cell = e.target.closest('.cell, .mini-cell');
+  if (!cell || cell.classList.contains('out') || !cell.dataset.date) return; // 非本月格子忽略
+  selectedDate = cell.dataset.date;
+  renderAll();
+});
+
+/* ===== 【悬停提示】鼠标停在某天的格子上，浮出一张卡片，完整显示这天的工作情况 =====
+   为什么不用浏览器自带的 title：一是要等 1 秒才显示、二是样式不能改、三是长备注会显示不全。
+   自己做一张卡片，就能把状态、加班时长、备注全文一次性列出来，这就是“全览工作情况”。 */
+
+// tipEl / calendarEl 只取一次（页面不会重建这两个容器）
+const tipEl = document.getElementById('tip');
+const calendarEl = document.getElementById('calendarArea');
+
+// 组装提示卡片里的 HTML
+function buildTipHtml(ds){
+  const st = effectiveStatusOf(ds);  // 这天最终生效的状态
+  const rec = records[ds] || {};
+  const ovt = isOvertime(ds);        // 有没有勾“今天有加班”
+  const isHol = isLegalHoliday(ds);  // 是不是法定节假日
+
+  // 标题：日期 + 星期（是今天的话再标注一下）
+  let h = '<div class="t-date">' + ds + ' ' + WEEK_NAME[weekdayOf(ds)]
+        + (ds === todayStr ? '（今天）' : '') + '</div>';
+
+  // 状态：主状态名；法定假日显示成“法定休假（国庆节）”；有加班再追加“＋ 加班”
+  let state = st ? STATUS[st].label : '未填写';
+  if (isHol && st === 'holiday') state = '法定休假（' + holidayMap[ds] + '）';
+  if (ovt) state += ' ＋ 加班';
+  h += '<div class="t-row">状态：<b>' + state + '</b></div>';
+
+  // 加班时长（勾了加班才显示）
+  if (ovt) h += '<div class="t-row">加班时长：<b>' + (rec.hours ? rec.hours + ' 小时' : '未填写') + '</b></div>';
+
+  // 法定节假日却出勤：单独提醒一句（和格子上那种玫红底色对应）
+  if (isHol && (st === 'work' || st === 'trip' || ovt)){
+    h += '<div class="t-row t-hol">' + holidayMap[ds] + '出勤（按节假日加班算）</div>';
+  }
+
+  // 备注：整段显示、不截断（这是“全览工作情况”的关键）
+  const note = (rec.note || '').trim();
+  h += note
+    ? '<div class="t-note">' + escapeHtml(note) + '</div>'
+    : '<div class="t-note t-empty">（这天没有写备注）</div>';
+
+  return h;
+}
+
+// 把卡片挪到鼠标旁边，并保证不会超出窗口右边 / 下边
+function moveTip(e){
+  const box = tipEl.getBoundingClientRect();  // 卡片当前尺寸（已显示出来才量得准）
+  let x = e.clientX + 16;
+  let y = e.clientY + 18;
+  if (x + box.width  > window.innerWidth  - 8) x = e.clientX - box.width  - 16; // 右边放不下就翻到左边
+  if (y + box.height > window.innerHeight - 8) y = e.clientY - box.height - 18; // 下边放不下就翻到上边
+  tipEl.style.left = x + 'px';
+  tipEl.style.top  = y + 'px';
+}
+
+function hideTip(){ tipEl.classList.remove('show'); }
+
+// 鼠标进入某个日期格子：生成内容 -> 显示 -> 贴到鼠标旁边
+calendarEl.addEventListener('mouseover', function(e){
+  const cell = e.target.closest('[data-date]');
+  if (!cell || !cell.dataset.date) return;   // 非本月的占位格子没有 data-date，忽略
+  tipEl.innerHTML = buildTipHtml(cell.dataset.date);
+  tipEl.classList.add('show');
+  moveTip(e);
+});
+// 鼠标在格子里移动：卡片跟着鼠标走
+calendarEl.addEventListener('mousemove', function(e){
+  if (tipEl.classList.contains('show')) moveTip(e);
+});
+// 鼠标离开格子：隐藏。
+// 注意 relatedTarget —— 如果只是从格子里某一行小字移到同一格子的另一行，那不算离开，不隐藏。
+calendarEl.addEventListener('mouseout', function(e){
+  const to = e.relatedTarget;
+  if (to && to.closest && to.closest('[data-date]')) return;
+  hideTip();
+});
+// 点击后日历会重绘（格子被换成新的），顺手收起卡片，免得残留旧内容
+calendarEl.addEventListener('click', hideTip);
+// 滚页面时卡片会和鼠标脱节，直接收起来
+window.addEventListener('scroll', hideTip, true);
+
+// “全年总览 / 回到月视图”按钮：在两种视图之间来回切换
+document.getElementById('btnYearView').addEventListener('click', function(){
+  viewMode = (viewMode === 'month') ? 'year' : 'month';
+  renderAll();
+});
+
+document.getElementById('btnPrevMonth').addEventListener('click', function(){ changeMonth(-1); });
+document.getElementById('btnNextMonth').addEventListener('click', function(){ changeMonth(1); });
+document.getElementById('btnPrevYear').addEventListener('click', function(){ changeYear(-1); });
+document.getElementById('btnNextYear').addEventListener('click', function(){ changeYear(1); });
+
+// “今天”：跳回今天所在的月份、切回月视图，并选中今天
+document.getElementById('btnToday').addEventListener('click', function(){
+  const now = new Date();
+  view.year = now.getFullYear();
+  view.month = now.getMonth();
+  viewMode = 'month';   // 在年视图里点“今天”也会回到月视图
+  selectedDate = todayStr;
+  renderAll();
+});
+
+// “填充工作日”：把当前视图范围内的普通工作日，一键填成“上班”
+// 月视图 = 本月；年视图 = 今年一整年
+// 注意：只填【今天及以前】的日期。未来的工作日还没到，预填成“上班”没有意义。
+document.getElementById('btnFillWorkdays').addEventListener('click', function(){
+  const y = view.year;
+  // 根据当前视图决定要遍历的日期区间
+  const start = (viewMode === 'month') ? new Date(y, view.month, 1)    : new Date(y, 0, 1);
+  const end   = (viewMode === 'month') ? new Date(y, view.month + 1, 0): new Date(y, 11, 31);
+
+  let filled = 0;
+  const cur = new Date(start);
+  while (cur <= end){
+    const ds = fmtDate(cur);
+
+    // 三个条件同时满足才填：
+    //   ① ds <= todayStr —— 只要今天及以前的日期。
+    //      日期是 "YYYY-MM-DD" 这种固定长度的格式，所以直接用字符串比大小，
+    //      结果和真实时间先后顺序完全一致（"2026-10-20" > "2026-10-19"）。
+    //   ② 没有已有记录 —— 避免覆盖用户已经填好的内容。
+    //   ③ 是普通工作日 —— 非法定节假日、非周末、非调休补班日。
+    if (ds <= todayStr
+        && !(records[ds] && records[ds].status)
+        && !holidayMap[ds] && !makeupWorkSet.has(ds) && !isWeekend(ds)){
+      records[ds] = { status:'work', note:'' };
+      filled++;
+    }
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  saveRecords();
+  renderAll();
+  alert('已把今天及以前的 ' + filled + ' 个工作日填为“上班”（未来的日期不会预填）。');
+});
+
+/* 【工资计算】月薪输入框：先把已保存的值回显出来，改动后立刻存盘并重算统计 */
+const salaryInput = document.getElementById('salaryInput');
+salaryInput.value = monthlySalary ? monthlySalary : '';
+salaryInput.addEventListener('input', function(){
+  const v = Math.max(0, Number(salaryInput.value) || 0); // 只接受非负数字
+  monthlySalary = v;
+  saveSalary();
+  renderStats();   // 只需要重算统计，不必整页重绘（避免打断用户输入）
+});
+
+// 导出备份：把记录打包成 JSON 文件下载
+document.getElementById('btnExport').addEventListener('click', function(){
+  const data = { version:1, exportedAt:new Date().toISOString(), salary:monthlySalary, records:records };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type:'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'work-calendar-backup-' + todayStr + '.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+
+// 清空本机所有数据：两层确认防止误操作，然后彻底刷新
+document.getElementById('btnClearAll').addEventListener('click', function(){
+  if (!confirm('⚠️ 确认清空吗？\n会删除本机全部上班记录和月薪设置，且不可恢复。')) return;
+  if (!confirm('🔴 再确认一次！\n强烈建议先点「导出备份」保存一份。确定继续吗？')) return;
+  try{ localStorage.removeItem(STORAGE_KEY); }catch(e){}
+  try{ localStorage.removeItem(SALARY_KEY); }catch(e){}
+  location.reload();  // 刷新页面回到初始状态（比只重绘更彻底）
+});
+
+// 导入备份：读取 JSON 文件并与本地记录合并（同一天以导入的为准）
+document.getElementById('btnImport').addEventListener('click', function(){
+  document.getElementById('fileInput').click();
+});
+
+document.getElementById('fileInput').addEventListener('change', function(e){
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(){
+    try{
+      const data = JSON.parse(reader.result);
+      const incoming = data.records || data; // 兼容直接是记录对象的情况
+      // 【工资计算】备份里带了月薪就一并恢复
+      if (data.salary != null){
+        monthlySalary = Number(data.salary) || 0;
+        saveSalary();
+        salaryInput.value = monthlySalary ? monthlySalary : '';
+      }
+      let count = 0;
+      Object.keys(incoming).forEach(function(ds){
+        const rec = incoming[ds];
+        // 【兼容旧备份】老备份里“加班”可能是 status === 'overtime'，
+        // 迁移成新格式 { status:'work', overtime:true }，和 loadRecords 里的处理保持一致。
+        if (rec && rec.status === 'overtime'){
+          rec.status = 'work';
+          rec.overtime = true;
+        }
+        records[ds] = rec;
+        count++;
+      });
+      saveRecords();
+      renderAll();
+      alert('已导入 ' + count + ' 条记录。');
+    }catch(err){
+      alert('导入失败：文件不是有效的备份 JSON。');
+    }
+    e.target.value = ''; // 清空 input，方便再次选择同一个文件
+  };
+  reader.readAsText(file);
+});
+
+/* -------------------------------------------------------------------------
+   第 11 部分：启动
+   ------------------------------------------------------------------------- */
+(function init(){
+  // 默认选中今天，并让日历显示到今天的月份
+  selectedDate = todayStr;
+  renderAll();
+})();
+</script>
+</body>
+</html>

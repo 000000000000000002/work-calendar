@@ -132,6 +132,16 @@
   }
 
   /* ========== 6. 右侧填写面板 ========== */
+  /* 面板标题行：左右两个“前一天 / 后一天”箭头，中间是日期。
+     连续补填好几天时，不用每次回到日历里找格子。 */
+  .panel-head{ display:flex; align-items:center; gap:6px; }
+  .panel-head .panel-title{ flex:1; text-align:center; margin-bottom:0; }
+  .day-nav{
+    border:1px solid var(--line); background:#fff; border-radius:8px;
+    width:28px; height:28px; padding:0; font-size:17px; line-height:1;
+    color:#4a5468; cursor:pointer; flex:none; transition:.12s;
+  }
+  .day-nav:hover{ border-color:var(--primary); color:var(--primary); background:#eef4ff; }
   .panel-title{ font-size:15px; font-weight:bold; margin-bottom:2px; }
   .panel-sub{ font-size:12px; color:var(--muted); min-height:18px; margin-bottom:12px; }
   .panel-sub b{ color:#e03131; }
@@ -164,6 +174,55 @@
   }
   .status-btn:hover{ box-shadow:inset 0 0 0 1px var(--sc); }
   .status-btn.active{ background:var(--sc); border-color:var(--sc); color:#fff; }
+
+  /* 备注区上方的“常用短语”按钮：点一下就把这句话插进备注，省得每天重复打字。
+     用胶囊形状 + 浅灰底，和下面的状态按钮区分开，不抢视觉重点。 */
+  .note-tools{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:8px; }
+  .chip{
+    border:1px solid var(--line); background:#f7f9fc; color:#4a5468;
+    border-radius:999px; padding:4px 10px; font-size:12px; line-height:1.4;
+    cursor:pointer; transition:.12s;
+  }
+  .chip:hover{ border-color:var(--primary); color:var(--primary); background:#eef4ff; }
+  /* “沿用上次”是主动作，用蓝色描边稍微强调一下 */
+  .chip.reuse{ border-color:#c7d7f5; background:#eaf1ff; color:#2f6fed; font-weight:bold; }
+  /* 备注框下方的一行小信息：左边字数、右边“已沿用/没找到”的提示 */
+  .note-meta{
+    display:flex; justify-content:space-between; gap:8px;
+    margin-top:6px; font-size:12px; color:var(--muted); min-height:17px;
+  }
+  .note-hint{ color:#0ca678; }
+  /* 日报常常要写好几行，行高给大一点，读起来不挤 */
+  #noteInput{ line-height:1.7; }
+
+  /* 历史备注自动补全：输入到第 2 个字时，从以前的备注里找出相似的句子列在下面。
+     点一条就把当前这句话替换成完整的那句，省得重复打字。 */
+  .note-suggest{
+    margin-top:6px; border:1px solid var(--line); border-radius:8px;
+    overflow:hidden; background:#fff;
+  }
+  .note-suggest[hidden]{ display:none !important; }
+  .sug{
+    display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+    width:100%; text-align:left; border:0; border-bottom:1px dashed var(--line);
+    background:#fff; padding:6px 9px; font-family:inherit; font-size:12px;
+    line-height:1.5; color:#4a5468; cursor:pointer;
+  }
+  .sug:last-child{ border-bottom:0; }
+  .sug:hover{ background:#eef4ff; color:var(--primary); }
+  .sug em{ font-style:normal; color:var(--muted); font-size:11px; flex:none; }
+
+  /* 手机端（屏幕较窄时）：把可点区域放大，手指更容易点中。
+     输入框字号必须 ≥16px，否则 iOS Safari 聚焦时会自动放大整个页面。 */
+  @media (max-width:920px){
+    .status-btn{ padding:9px 0; font-size:13px; }
+    .chip{ padding:7px 12px; font-size:13px; }
+    .btn{ padding:8px 14px; }
+    .day-nav{ width:36px; height:36px; font-size:20px; }
+    .sug{ padding:9px 10px; font-size:13px; }
+    #noteInput{ font-size:16px; }
+  }
+
   input[type="number"], textarea{
     width:100%; border:1px solid var(--line); border-radius:8px;
     padding:7px 9px; font-family:inherit; font-size:13px; color:var(--text);
@@ -385,6 +444,22 @@ const STATUS = {
 };
 // 面板上状态按钮的显示顺序（“加班”已挪到下面的复选框，不再出现在这里）
 const STATUS_ORDER = ['work','trip','leave','adjust','holiday','rest'];
+
+// 备注快捷短语：点一下就把这句插到备注里（后面会自动补一个「；」）。
+// 只是“省打字”的快捷方式，不影响自由输入——想写什么直接写，不点这些按钮也行。
+// 想改内容，直接改这个数组即可（增删条目前后不要漏掉引号和逗号）。
+const NOTE_PHRASES = [
+  '完成需求开发',
+  '参加需求评审',
+  '联调测试',
+  '处理线上问题',
+  '写文档',
+  '开会'
+];
+
+// 日报模板：点「插入模板」时整段填进来，光标停在第一条后面，接着写就行。
+// 觉得这三段不合适（比如还要写“风险/待跟进”），直接改这个字符串即可。
+const NOTE_TEMPLATE = '- 今日完成：\n- 明日计划：\n- 待跟进：';
 
 /* -------------------------------------------------------------------------
    第 3 部分：法定节假日数据
@@ -713,7 +788,11 @@ function renderPanel(){
   const ovt = !!rec.overtime;
 
   panel.innerHTML =
-      '<div class="panel-title">' + selectedDate + ' ' + WEEK_NAME[weekdayOf(selectedDate)] + '</div>'
+      '<div class="panel-head">'
+    +   '<button type="button" class="day-nav" id="btnPrevDay" title="前一天">‹</button>'
+    +   '<div class="panel-title">' + selectedDate + ' ' + WEEK_NAME[weekdayOf(selectedDate)] + '</div>'
+    +   '<button type="button" class="day-nav" id="btnNextDay" title="后一天">›</button>'
+    + '</div>'
     + '<div class="panel-sub">' + subText + '</div>'
     + holidayTip
     + '<div class="field"><label>当天状态</label><div class="status-group">' + btns + '</div></div>'
@@ -727,8 +806,21 @@ function renderPanel(){
     +   '</div>'
     + '</div>'
     + '<div class="field"><label>工作情况 / 备注</label>'
-    +   '<textarea id="noteInput" rows="5" placeholder="例如：完成接口联调；晚上处理线上问题到 21:00">'
-    +     escapeHtml(rec.note || '') + '</textarea></div>'
+    +   '<div class="note-tools">'
+    +     NOTE_PHRASES.map(function(p){
+            return '<button type="button" class="chip" data-phrase="' + p + '">' + p + '</button>';
+          }).join('')
+    +     '<button type="button" class="chip" id="btnTemplate" title="插入 今日完成 / 明日计划 / 待跟进 三段模板">插入模板</button>'
+    +     '<button type="button" class="chip reuse" id="btnReuseNote" title="把往前最近一天写过的备注整段贴过来">沿用上次</button>'
+    +   '</div>'
+    +   '<textarea id="noteInput" rows="6" placeholder="今天做了什么？例：完成订单页联调；修复导出乱码；明天对接支付接口">'
+    +     escapeHtml(rec.note || '') + '</textarea>'
+    +   '<div class="note-suggest" id="noteSuggest" hidden></div>'
+    +   '<div class="note-meta">'
+    +     '<span id="noteCount">' + noteLength(rec.note) + ' 字</span>'
+    +     '<span class="note-hint" id="noteHint"></span>'
+    +   '</div>'
+    + '</div>'
     + '<div class="panel-actions">'
     +   '<button class="btn ghost" id="btnClear">清除当天记录</button>'
     +   '<span class="save-hint" id="saveHint">已保存</span>'
@@ -739,6 +831,10 @@ function renderPanel(){
 
 // 给面板里的控件绑定事件（每次重建面板后都要重新绑定）
 function bindPanelEvents(){
+  // 0) 前一天 / 后一天：连续补填好几天时，不用每次回日历里找格子
+  document.getElementById('btnPrevDay').addEventListener('click', function(){ shiftSelectedDay(-1); });
+  document.getElementById('btnNextDay').addEventListener('click', function(){ shiftSelectedDay(1); });
+
   // 1) 状态按钮：点击即写入主状态（只改 status，不动加班标记）
   document.querySelectorAll('.status-btn').forEach(function(btn){
     btn.addEventListener('click', function(){
@@ -772,10 +868,83 @@ function bindPanelEvents(){
 
   // 4) 备注文本框：边输入边保存（localStorage 写入很快，不必担心性能）
   const noteInput = document.getElementById('noteInput');
-  noteInput.addEventListener('input', function(){
+  const noteCount = document.getElementById('noteCount');
+  const noteSuggest = document.getElementById('noteSuggest');
+
+  // 备注内容一变，就做四件事：存盘、让日历格子同步、更新字数、刷新历史候选
+  function syncNote(){
     updateRecord(currentDate(), { note: noteInput.value });
     showSavedHint();
     refreshDayCells();   // 让格子上的状态 / 备注同步更新（月视图、年视图都支持）
+    if (noteCount) noteCount.textContent = noteLength(noteInput.value) + ' 字';
+    updateNoteSuggest();
+  }
+  noteInput.addEventListener('input', syncNote);
+  // 光标移动（方向键、鼠标点进句子中间）后，候选要按新的光标位置重算
+  noteInput.addEventListener('click', updateNoteSuggest);
+  noteInput.addEventListener('keyup', function(e){
+    if (e.key === 'Escape'){ hideNoteSuggest(); return; }
+    updateNoteSuggest();
+  });
+  // 点到别处时收起候选
+  noteInput.addEventListener('blur', function(){ setTimeout(hideNoteSuggest, 0); });
+
+  // 4-1) 常用短语：插到光标所在位置（不是直接覆盖），这样可以在句子中间补词。
+  //      如果光标前一个字不是标点/换行，就先补一个「；」把两句隔开，避免连成一坨。
+  document.querySelectorAll('.note-tools .chip[data-phrase]').forEach(function(chip){
+    chip.addEventListener('click', function(){
+      const start = noteInput.selectionStart == null ? noteInput.value.length : noteInput.selectionStart;
+      const end   = noteInput.selectionEnd == null ? start : noteInput.selectionEnd;
+      const before = noteInput.value.slice(0, start);
+      const after  = noteInput.value.slice(end);
+      const needSep = before && !/[，。；、,;：\n\s]$/.test(before);
+      const inserted = (needSep ? '；' : '') + chip.dataset.phrase + '；';
+      noteInput.value = before + inserted + after;
+      const pos = before.length + inserted.length;
+      noteInput.focus();                        // 插完把焦点留在备注框，可以接着打字
+      noteInput.setSelectionRange(pos, pos);    // 光标停在插入内容之后
+      syncNote();
+    });
+  });
+
+  // 4-2) 沿用上次：日报每天内容相似时，一键把「往前最近一天写过备注」整段贴过来。
+  //      当前备注已有内容时追加到末尾，不会覆盖你刚写的东西。
+  document.getElementById('btnReuseNote').addEventListener('click', function(){
+    const src = findPreviousNote(currentDate());
+    if (!src){ flashNoteHint('往前没有找到带备注的日子'); return; }
+
+    if (noteInput.value.trim()){
+      const sep = /[，。；、,;：\n\s]$/.test(noteInput.value) ? '' : '；';
+      noteInput.value = noteInput.value + sep + src.note;
+    } else {
+      noteInput.value = src.note;
+    }
+    syncNote();
+    flashNoteHint('已沿用 ' + src.date + ' 的备注');
+    noteInput.focus();
+    noteInput.setSelectionRange(noteInput.value.length, noteInput.value.length);
+  });
+
+  // 4-3) 插入模板：填入「今日完成 / 明日计划 / 需协调」三段，光标停在第一条后面
+  document.getElementById('btnTemplate').addEventListener('click', function(){
+    const cur = noteInput.value;
+    const prefix = (cur && !/\n$/.test(cur)) ? '\n' : '';   // 已有内容时先换行，不粘在一起
+    const tpl = prefix + NOTE_TEMPLATE;
+    noteInput.value = cur + tpl;
+    const caret = (cur + prefix).length + '- 今日完成：'.length;
+    noteInput.focus();
+    noteInput.setSelectionRange(caret, caret);
+    syncNote();
+  });
+
+  // 4-4) 点历史候选：把当前这句替换成完整的那句
+  //      mousedown 先 preventDefault，避免备注框失焦、光标位置丢失
+  noteSuggest.addEventListener('mousedown', function(e){
+    if (e.target.closest('.sug')) e.preventDefault();
+  });
+  noteSuggest.addEventListener('click', function(e){
+    const btn = e.target.closest('.sug');
+    if (btn) applyNoteSuggest(Number(btn.dataset.i));
   });
 
   // 5) 清除当天记录
@@ -805,6 +974,142 @@ function showSavedHint(){
   hint.classList.add('show');
   clearTimeout(showSavedHint._timer);
   showSavedHint._timer = setTimeout(function(){ hint.classList.remove('show'); }, 900);
+}
+
+// 统计字数：忽略空格和换行，中文按字、英文按字符，给个大概的篇幅参考
+function noteLength(text){
+  return String(text || '').replace(/\s/g, '').length;
+}
+
+// 找“往前最近一天写过备注”的记录，供「沿用上次」按钮使用。
+// 日期是 'YYYY-MM-DD' 格式，字符串本身可以直接比大小，不用转成 Date。
+function findPreviousNote(dateStr){
+  let found = '';
+  Object.keys(records).forEach(function(ds){
+    const rec = records[ds];
+    if (!rec || !rec.note || !rec.note.trim()) return; // 没写备注的跳过
+    if (ds >= dateStr) return;                          // 只要更早的日子
+    if (ds > found) found = ds;                         // 记下最晚的那一天
+  });
+  return found ? { date: found, note: records[found].note } : null;
+}
+
+// 在备注框右下角显示一句临时提示（如“已沿用 2026-10-19 的备注”），2.5 秒后自动消失
+function flashNoteHint(msg){
+  const el = document.getElementById('noteHint');
+  if (!el) return;
+  el.textContent = msg;
+  clearTimeout(flashNoteHint._timer);
+  flashNoteHint._timer = setTimeout(function(){ el.textContent = ''; }, 2500);
+}
+
+// 面板里“前一天 / 后一天”按钮：把正在编辑的日期挪一天。
+// 跨月时让日历跟着翻到对应月份，否则选中的日子落在视野外，用户会以为按钮没反应。
+function shiftSelectedDay(delta){
+  if (!selectedDate) return;
+  const d = parseDate(selectedDate);
+  d.setDate(d.getDate() + delta);
+  selectedDate = fmtDate(d);
+  if (d.getFullYear() !== view.year || d.getMonth() !== view.month){
+    view.year = d.getFullYear();
+    view.month = d.getMonth();
+  }
+  viewMode = 'month';   // 年视图下点前后一天，切回月视图，方便看清选中的那天
+  renderAll();
+}
+
+// -------------------------------------------------------------------------
+// 备注的历史自动补全
+// 思路：把所有历史备注按「；/。/换行」切成一句一句，去重后作为候选。
+// 用户打到 2 个字时，找出包含这两个字的句子，列在输入框下面，点一下就补全。
+// 全部在本机内存里算，不发任何网络请求。
+// -------------------------------------------------------------------------
+
+// 收集历史“句子”候选（excludeDate：排除正在编辑的这天，避免自己提示自己）
+function collectNoteSegments(excludeDate){
+  const seen = {};
+  const list = [];
+  Object.keys(records).forEach(function(ds){
+    if (ds === excludeDate) return;
+    const rec = records[ds];
+    if (!rec || !rec.note) return;
+    rec.note.split(/[；;\n。]/).forEach(function(seg){
+      seg = seg.trim().replace(/^-\s*/, '');        // 去掉模板行首的 “- ”
+      if (seg.length < 2 || seg.length > 40) return; // 太短没意义、太长列表放不下
+      if (seen[seg]) return;                         // 去重
+      seen[seg] = true;
+      list.push({ text: seg, date: ds });
+    });
+  });
+  list.sort(function(a, b){ return a.date < b.date ? 1 : -1; }); // 最近用过的排前面
+  return list;
+}
+
+// 收起候选列表
+function hideNoteSuggest(){
+  const el = document.getElementById('noteSuggest');
+  if (!el) return;
+  el.hidden = true;
+  el.innerHTML = '';
+  el._hits = null;
+}
+
+// 根据“光标前这一句”重新计算候选，并画到输入框下面
+function updateNoteSuggest(){
+  const el = document.getElementById('noteSuggest');
+  const input = document.getElementById('noteInput');
+  if (!el || !input || !selectedDate){ hideNoteSuggest(); return; }
+
+  const caret = input.selectionStart == null ? input.value.length : input.selectionStart;
+  const before = input.value.slice(0, caret);
+  // 只取光标所在的这一句（以 ；;、换行、。 分隔）
+  const token = before.split(/[；;\n。]/).pop().trim();
+
+  if (token.length < 2){ hideNoteSuggest(); return; }   // 只打 1 个字时候选太多，不打扰
+
+  const hits = collectNoteSegments(selectedDate)
+    .filter(function(s){ return s.text.indexOf(token) !== -1 && s.text !== token; })
+    .slice(0, 5);
+
+  if (!hits.length){ hideNoteSuggest(); return; }
+
+  el._hits = hits;
+  el.innerHTML = hits.map(function(s, i){
+    return '<button type="button" class="sug" data-i="' + i + '">'
+         +   '<span>' + escapeHtml(s.text) + '</span>'
+         +   '<em>' + s.date.slice(5) + '</em>'
+         + '</button>';
+  }).join('');
+  el.hidden = false;
+}
+
+// 点了某条候选：把“当前这句”整体替换成候选的完整句子（保留原缩进）
+function applyNoteSuggest(i){
+  const el = document.getElementById('noteSuggest');
+  const input = document.getElementById('noteInput');
+  if (!el || !input || !el._hits || !el._hits[i]) return;
+  const sug = el._hits[i].text;
+
+  const start = input.selectionStart == null ? input.value.length : input.selectionStart;
+  const end   = input.selectionEnd == null ? start : input.selectionEnd;
+  const before = input.value.slice(0, start);
+  const after  = input.value.slice(end);
+
+  // 找到当前这句的起点：最后一个分隔符之后
+  let cut = 0;
+  ['；',';','\n','。'].forEach(function(ch){
+    const p = before.lastIndexOf(ch) + 1;
+    if (p > cut) cut = p;
+  });
+  const lead = before.slice(cut).match(/^\s*/)[0];   // 保留行首空格/缩进
+  const head = before.slice(0, cut) + lead;
+
+  input.value = head + sug + after;
+  const pos = (head + sug).length;
+  input.focus();
+  input.setSelectionRange(pos, pos);
+  input.dispatchEvent(new Event('input'));   // 复用统一的“存盘 + 刷新”流程
+  hideNoteSuggest();                         // 补全完就收起列表（放在 dispatch 之后，避免被重新弹出）
 }
 
 /* =========================================================================

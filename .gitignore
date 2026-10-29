@@ -1,0 +1,15 @@
+# Git 忽略清单：这些文件/目录不进入版本管理
+# （.gitignore 本身会被提交，是仓库的一部分）
+
+# ---- 工具生成的临时目录，与项目无关 ----
+# TRAE 的 HTML 分享打包缓存
+.trae-html-share-packages/
+
+# 截图输出目录
+.screenshots/
+
+# ---- 编辑器/系统产生的杂项 ----
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini

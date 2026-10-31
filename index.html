@@ -107,12 +107,24 @@
      靠“后来者覆盖”生效，写前面就不会起作用。 */
   .cell[data-holiday-work], .mini-cell[data-holiday-work]{ --c:#c2255c; --b:#ffe3ee; }
 
-  .cell .c-top{ display:flex; align-items:center; justify-content:space-between; gap:4px; }
-  .cell .c-num{ font-size:13px; font-weight:bold; }
+  /* 【节日底色】法定节假日如果只是默认「休息」，用暖粉底色 + 玫红色标签，
+     和普通周末的灰色、普通工作日的白色区分开。
+     :not([data-holiday-work]) 是为了不和上面的“节假日出勤”打架——
+     节假日只勾了加班时，仍然要显示那条更醒目的深玫红。
+     这条选择器写得更长（特异性更高），所以不管放前面还是后面都会盖住上面的 rest 配色。 */
+  .cell[data-holiday][data-status="rest"]:not([data-holiday-work]),
+  .mini-cell[data-holiday][data-status="rest"]:not([data-holiday-work]){ --c:#c2255c; --b:#fff0f4; }
+
+  /* 【标签换行】日期数字和状态标签在窄格子里放不下时，让标签自己换到下一行，
+     否则“国庆节·加班”这种长标签会被格子右边裁掉。 */
+  .cell .c-top{ display:flex; align-items:center; justify-content:space-between; gap:4px; flex-wrap:wrap; }
+  .cell .c-num{ font-size:13px; font-weight:bold; flex-shrink:0; }
   .cell .c-tag{
     font-size:10px; line-height:1.4; padding:1px 5px; border-radius:5px;
-    color:#fff; background:var(--c,#98a1b3); white-space:nowrap;
+    color:#fff; background:var(--c,#98a1b3); white-space:nowrap; margin-left:auto;
   }
+  /* 【缺勤】应出勤的工作日却什么都没填：标签用深红实心，比灰色的“未填写”更醒目 */
+  .cell .c-tag.absent{ background:#c92a2a; }
   .cell .c-sub{
     margin-top:4px; font-size:10px; color:var(--muted);
     overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
@@ -122,6 +134,15 @@
   .cell .c-dot{
     position:absolute; right:7px; bottom:6px; font-size:10px;
     color:#e8590c; font-weight:bold;
+  }
+
+  /* 【节日水印】节日格子右下角放一个半透明的节日图案（端午→龙舟、中秋→月饼…）。
+     它是绝对定位、pe-none（不吃鼠标事件），并且放在格子内容的最前面，
+     这样日期、标签、备注都画在它上面，不会被遮挡。 */
+  .cell .c-ico{
+    position:absolute; right:-2px; bottom:-6px;
+    font-size:50px; line-height:1; opacity:.32;
+    pointer-events:none; user-select:none;
   }
 
   /* ========== 5. 图例 ========== */
@@ -274,6 +295,12 @@
   .stat .k{ font-size:12px; color:var(--muted); }
   .stat .v{ font-size:19px; font-weight:bold; margin-top:2px; }
   .stat .v small{ font-size:11px; font-weight:normal; color:var(--muted); margin-left:2px; }
+
+  /* 【合并卡片】把“截止今天应出勤”和“当月应出勤”放进同一个卡片里，上下两行显示 */
+  .stat-merged .mrow{ display:flex; align-items:baseline; gap:3px; margin-top:3px; }
+  .stat-merged .mrow b{ font-size:19px; font-weight:bold; }              /* 数字，大号加粗 */
+  .stat-merged .mrow small{ font-size:11px; font-weight:normal; color:var(--muted); } /* 单位“天” */
+  .stat-merged .mrow .mk{ margin-left:auto; font-size:11px; color:var(--muted); text-align:right; }
 
   /* 【工资计算】统计卡片下方那行“工资明细”小字，横跨整行显示计算公式 */
   .salary-note{
@@ -558,18 +585,48 @@ function fmtMoney(n){
 
 /* -------------------------------------------------------------------------
    第 5 部分：某一天的“默认状态”
-   说明：法定节假日/周末/调休补班日会被自动标注，普通工作日保持空白，等用户填写。
+   说明：周末 / 法定节假日会被自动标注；调休补班日虽然算工作日，但不自动填状态，
+        和普通工作日一样留空等用户写——没写就按“缺勤”提示。
    ------------------------------------------------------------------------- */
 function autoStatusOf(dateStr){
-  if (holidayMap[dateStr]) return 'holiday';        // 法定放假
-  if (makeupWorkSet.has(dateStr)) return 'work';    // 调休补班日，默认按上班算
+  // 【法定节假日默认按“休息”算】放假那天如果你什么都没填，就当作是在休息，
+  // 而不是默认成“法定休假”这个状态——两者在统计里是两个独立的格子（休息 / 法定休假），
+  // 按“默认休息”的口径，节假日的天数会归到「休息」里。
+  // 需要明确区分时，在面板里点「法定休假」即可，那天就会记成法定休假。
+  if (holidayMap[dateStr]) return 'rest';           // 法定放假：默认休息
+  // 【关键顺序】调休补班日必须排在“周末休息”前面判断。
+  // 补班日本来就落在周六/周日上，如果先走 isWeekend 就会返回“休息”，
+  // 这样点按钮取消后又会回到“休息”而不是“缺勤”。
+  if (makeupWorkSet.has(dateStr)) return null;      // 补班日 = 工作日：未填写（空着才显示缺勤）
   if (isWeekend(dateStr)) return 'rest';            // 普通周末休息
-  return null;                                      // 普通工作日：未填写
+  // 普通工作日同样返回 null（未填写），没填状态日历就按“缺勤”提示。
+  return null;
 }
 
 // 判断某天是不是“法定节假日”（holidayMap 里存了节日名，如 "2026-10-01": "国庆节"）
 // 【新增】供日历、面板、统计三处共用，避免到处重复写 !!holidayMap[...]
 function isLegalHoliday(dateStr){ return !!holidayMap[dateStr]; }
+
+// 按节日名挑一个图案（emoji），画在节日格子右下角当水印。
+// 【为什么用 emoji 而不是图片】本项目承诺“零联网、零外部依赖”，
+// 用图片就得联网下载或者内嵌 base64，前者破坏隐私承诺、后者让文件变大；
+// emoji 是系统自带字体里的字符，不联网、不增加任何外部请求。
+function holidayIconOf(name){
+  if (!name) return '';
+  if (name.indexOf('元旦') !== -1) return '🎊';
+  if (name.indexOf('春节') !== -1) return '🧧';
+  if (name.indexOf('元宵') !== -1) return '🏮';
+  if (name.indexOf('清明') !== -1) return '🌿';
+  if (name.indexOf('劳动') !== -1) return '👷';
+  if (name.indexOf('端午') !== -1) return '🛶';   // 龙舟
+  if (name.indexOf('中秋') !== -1) return '🥮';   // 月饼
+  if (name.indexOf('重阳') !== -1) return '🌾';
+  if (name.indexOf('国庆') !== -1) return '🎉';
+  if (name.indexOf('儿童') !== -1) return '🎈';
+  if (name.indexOf('教师') !== -1) return '📚';
+  if (name.indexOf('七夕') !== -1) return '💞';
+  return '📅';                                     // 没匹配上的节日：用一本日历兜底
+}
 
 // 判断某天是不是“应出勤的工作日”：法定放假日不算；调休补班日算；普通周一~周五算。
 // 【新增】把这段判断抽成一个函数，统计里算“应出勤”和“出勤率分子”时共用，避免两处写两份逻辑。
@@ -593,13 +650,12 @@ function effectiveStatusOf(dateStr){
   return autoStatusOf(dateStr);
 }
 
-// 取某天的显示说明文字：用户备注优先，其次显示节日名/调休提示
+// 取某天的备注文字（只返回用户自己写的内容）
+// 【设计说明】节日名、“调休补班”这类是日历自带的规则标注，已经放在右上角小标签里了；
+// 这里只返回备注，避免它们混进备注行，让人分不清哪句是自己写的日报。
 function subtitleOf(dateStr){
   const rec = records[dateStr];
-  if (rec && rec.note) return rec.note;
-  if (holidayMap[dateStr]) return holidayMap[dateStr];
-  if (makeupWorkSet.has(dateStr)) return '调休补班';
-  return '';
+  return (rec && rec.note) ? rec.note : '';
 }
 
 /* =========================================================================
@@ -651,14 +707,33 @@ function buildGridHtml(y, m, compact){
 
     // 标签文字：
     //   - 法定休假（当天没出勤）：显示节日名，如“国庆节”
-    //   - 节假日却出勤：显示“节日名·上班/加班”，如“国庆节·加班”，一眼看出是节日加班
+    //   - 法定节假日但没填状态：默认按休息算，显示“国庆节·休息”
+    //   - 法定节假日却出勤：显示“节日名·加班”或“节日名·未加班”，
+    //     跟着“今天有加班”这个勾选框实时变，而不是写死一个状态
+    //   - 调休补班日：状态标签后面追加“·补班”，如“上班·补班”
     //   - 平时有加班：主状态名后面追加“·加班”，如“上班·加班”
+    //   - 应出勤的工作日（含补班日）已经过去了，却什么状态都没填：显示“缺勤”
     //   - 其余情况：只显示主状态中文名（上班 / 出差 / 请假 / 调休 / 休息）
     let tag = '';
-    if (holWork)              tag = holidayMap[ds] + '·' + (ovt ? '加班' : '上班');     // 国庆节·加班
+    let tagCls = '';                                       // 标签的额外样式（“缺勤”用红色）
+    if (holWork)              tag = holidayMap[ds] + (ovt ? '·加班' : '·未加班');       // 国庆节·加班 / 国庆节·未加班
+    else if (isHol && st === 'rest') tag = holidayMap[ds] + '·休息';                    // 国庆节·休息（放假默认休息）
     else if (st === 'holiday') tag = holidayMap[ds] || STATUS.holiday.label;           // 国庆节 / 法定休假
-    else if (st)               tag = STATUS[st].label + (ovt ? '·加班' : '');          // 上班·加班
+    else if (st){
+      tag = STATUS[st].label + (ovt ? '·加班' : '');                                   // 上班·加班
+      // 只有“上班”才追加“·补班”。补班日如果用户改成休息/请假，标签就不该再带补班，
+      // 否则会出现“休息·补班”这种自相矛盾的写法。
+      if (makeupWorkSet.has(ds) && st === 'work') tag += '·补班';                       // 上班·补班
+    }
     else if (ovt)              tag = '加班';                                            // 没填主状态但勾了加班
+    else if (isRequiredWorkday(ds) && ds <= todayStr){
+      // 【缺勤】该上班的日子已经到今天了，却连状态都没填。
+      // 未来的日子不提示，免得整月都挂满“缺勤”；法定节假日和周末本来就不该上班，也不提示。
+      // 【区分两种缺勤】普通工作日缺勤 / 法定调休补班日缺勤：
+      // 补班日本该休息却被调来上班，缺勤的“性质”和平时不一样，标签写成“补班·缺勤”区分开。
+      tag = makeupWorkSet.has(ds) ? '补班·缺勤' : '缺勤';
+      tagCls = ' absent';
+    }
 
     // 【悬停提示】不用浏览器自带的 title 了，改成鼠标移上去浮出一张自定义卡片
     // （见 buildTipHtml / bindHoverTip），这样备注再长也能看全，样式也统一。
@@ -666,11 +741,14 @@ function buildGridHtml(y, m, compact){
     // 【新增】节假日出勤时，多打一个标记属性；CSS 一看到它就把格子换成醒目的玫红色。
     // 月视图、年视图都会带上它，所以两个视图的颜色能保持一致。
     const holAttr = holWork ? ' data-holiday-work="1"' : '';
+    // 【节日底色】只要是法定节假日就多打一个标记属性，CSS 用它给「休息」的日子换暖粉底色，
+    // 这样节日（哪怕当天只是默认休息）和普通周末/工作日一眼就能分开。
+    const holDayAttr = isHol ? ' data-holiday="1"' : '';
 
     // ---------- 年视图的小格子：只放日期数字 ----------
     if (compact){
       const hasNote = !!(rec.note && rec.note.trim());
-      html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr
+      html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr + holDayAttr
             + '>' + dt.getDate()
             + (hasNote ? '<span class="mdot"></span>' : '') // 写过备注的日子点一个小圆点
             + '</div>';
@@ -680,11 +758,14 @@ function buildGridHtml(y, m, compact){
     // ---------- 月视图的大格子：日期 + 状态标签 + 备注 + 加班时长 ----------
     const sub = subtitleOf(ds);   // 备注 / 节日名 / 调休提示
     const dot = (ovt && rec.hours) ? ('+' + rec.hours + 'h') : '';
+    const ico = isHol ? holidayIconOf(holidayMap[ds]) : '';  // 节日水印图案（端午→龙舟、中秋→月饼…）
 
-    html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr + '>'
+    html += '<div class="' + cls.join(' ') + '" data-date="' + ds + '"' + statusAttr + holAttr + holDayAttr + '>'
+          // 水印放在最前面画，后面的日期/标签/备注会盖在它上面，不会挡住文字
+          +   (ico ? '<span class="c-ico">' + ico + '</span>' : '')
           +   '<div class="c-top">'
           +     '<span class="c-num">' + dt.getDate() + '</span>'
-          +     (tag ? '<span class="c-tag">' + tag + '</span>' : '')
+          +     (tag ? '<span class="c-tag' + tagCls + '">' + tag + '</span>' : '')
           +   '</div>'
           +   (sub ? '<div class="c-sub">' + escapeHtml(sub) + '</div>' : '')
           +   (dot ? '<div class="c-dot">' + dot + '</div>' : '')
@@ -765,12 +846,13 @@ function renderPanel(){
   else if (isWeekend(selectedDate)) subText = '周末';
 
   // 法定节假日提醒框：选中节假日时，在状态按钮上方插一条醒目的玫红提示，
-  // 提醒用户“这天出勤算加班”，要勾选「今天有加班」把它和平时上班区分开。
+  // 说明“这天点上班就自动算加班”，免得出勤和加班两个地方要填两次才看得懂。
   let holidayTip = '';
   if (isLegalHoliday(selectedDate)){
     holidayTip = '<div class="holiday-tip">'
       + '<b>' + selectedDate + ' 是法定节假日（' + holidayMap[selectedDate] + '）</b><br>'
-      + '这天出勤属于「节假日加班」，请选<b>上班</b>并勾选下面的<b>「今天有加班」</b>，与平时区分开。'
+      + '这天出勤属于「节假日加班」：点<b>上班</b>会自动勾上<b>「今天有加班」</b>，格子显示为「'
+      + holidayMap[selectedDate] + '·加班」；如果不是加班出勤，取消勾选即可。'
       + '</div>';
   }
 
@@ -835,10 +917,31 @@ function bindPanelEvents(){
   document.getElementById('btnPrevDay').addEventListener('click', function(){ shiftSelectedDay(-1); });
   document.getElementById('btnNextDay').addEventListener('click', function(){ shiftSelectedDay(1); });
 
-  // 1) 状态按钮：点击即写入主状态（只改 status，不动加班标记）
+  // 1) 状态按钮：点击写入主状态；再点一次当前高亮的状态则取消。
+  //    【取消 = 恢复日历默认】取消只把用户填的 status 删掉，之后仍由 autoStatusOf 决定：
+  //      补班日 → 又变回「上班·补班」、周末 → 「休息」、节假日 → 「国庆节·休息」。
+  //      也就是说取消的是“我手动改的那笔”，不是把日历规则也抹掉。
+  //    【节假日】法定节假日点“上班”会自动勾上加班的标记，格子直接显示“xx节·加班”。
   document.querySelectorAll('.status-btn').forEach(function(btn){
     btn.addEventListener('click', function(){
-      updateRecord(currentDate(), { status: btn.dataset.set });
+      const d = currentDate();
+      const k = btn.dataset.set;               // 这次点的状态，如 'work'
+      const isHol = isLegalHoliday(d);         // 这天是不是法定节假日
+
+      if (effectiveStatusOf(d) === k){
+        // —— 再点一次当前高亮的状态 = 取消，回到日历默认 ——
+        const patch = { status: null };         // null 表示删掉 status 字段（见 updateRecord）
+        // 节假日取消“上班”时，连带取消它自动勾上的加班；
+        // 否则 overtime 还留着，这天仍然会被算成“节假日加班”，看起来像没取消成功。
+        if (isHol && k === 'work'){ patch.overtime = false; patch.hours = 0; }
+        updateRecord(d, patch);
+      } else {
+        // —— 点的是别的状态 = 选中 ——
+        const patch = { status: k };
+        // 节假日上班 = 加班：自动勾上加班标记（时长留空，需要的话在下面填）
+        if (isHol && k === 'work') patch.overtime = true;
+        updateRecord(d, patch);
+      }
       renderAll();
     });
   });
@@ -960,9 +1063,15 @@ function bindPanelEvents(){
 function currentDate(){ return selectedDate; }
 
 // 修改某天的记录：只改传入的字段，其它字段保持不变
+// 【约定】patch 里某个字段传 null，表示“把这个字段删掉”。
+// 比如再点一次当前状态按钮取消状态时，传 { status: null }，
+// 记录里就不会留下一个 status:null 的残值（否则一整天会变成“有记录但状态是空的”）。
 function updateRecord(dateStr, patch){
   const rec = records[dateStr] || {};
-  Object.keys(patch).forEach(function(k){ rec[k] = patch[k]; });
+  Object.keys(patch).forEach(function(k){
+    if (patch[k] === null) delete rec[k];
+    else rec[k] = patch[k];
+  });
   records[dateStr] = rec;
   saveRecords();
 }
@@ -1125,9 +1234,15 @@ function computeStats(startDate, endDate){
   let overtimeHours = 0;      // 加班时长合计
   let overtimeDays = 0;       // 加班天数（勾了“今天有加班”的天数）
   let requiredDays = 0;       // 应出勤工作日：区间内“到今天为止已经过去”的工作日天数
-  let workedRequiredDays = 0; // 应出勤工作日里“实际出了勤”的天数（算出勤率用）
+  let requiredDaysFull = 0;   // 【算工资用】应出勤工作日“整月/整年”的总数，不管过没过完
+                              // 为什么单独记一个：工资 = 月薪 ÷ 当月应出勤（整月）× 实际出勤，
+                              // 分母必须是整月的 18 天，不能是“截至今天”的动态天数。
+  let workedRequiredDays = 0; // 应出勤工作日里“实际出了勤”的天数（算出勤率和工资都用它）
   let holidayAttendDays = 0;  // 法定节假日里仍然出勤的天数
-  let attendDays = 0;         // 实际出勤（主状态是上班/出差，或这天有加班）
+  let attendDays = 0;         // 【实际出勤】到岗天数：应出勤日 + 节假日/周末加班，只算到今天
+                              // 它和 workedRequiredDays 的区别：
+                              //   workedRequiredDays 只数“应出勤日”，用于出勤率和工资折算；
+                              //   attendDays 把节假日、周末加班也算进去，是“人真正干活的天数”。
 
   // 【动态应出勤的关键】“今天”的 Date 对象（0 点整）。
   // 下面用 cur <= today 判断某一天是不是“已经过去了”，决定它要不要计入应出勤。
@@ -1147,6 +1262,7 @@ function computeStats(startDate, endDate){
     // 【动态】只把“今天及以前”的应出勤工作日计入分母：
     // 未来的工作日还没到，如果也算进去，出勤率会显得虚低（比如 10 月才过半就按整月算）。
     if (past && mustWork) requiredDays++;
+    if (mustWork) requiredDaysFull++;   // 【整月口径】不管过没过完，只要是应出勤日就累加
 
     if (st && cnt[st] !== undefined) cnt[st]++;
     else cnt.empty++;
@@ -1164,7 +1280,8 @@ function computeStats(startDate, endDate){
     // 节假日的加班不计入这里，免得出勤率被顶到 100% 以上（那是额外出勤，不算“应出勤的完成度”）。
     if (past && mustWork && attend) workedRequiredDays++;
 
-    if (attend) attendDays++;
+    // 【实际出勤】只要这天真的干了活就算（含节假日、周末加班），但未来的日子不算
+    if (past && attend) attendDays++;
 
     cur.setDate(cur.getDate() + 1);   // 日期 +1 天，继续循环
   }
@@ -1174,9 +1291,10 @@ function computeStats(startDate, endDate){
     overtimeHours: overtimeHours,     // 加班时长合计
     overtimeDays: overtimeDays,       // 加班天数
     requiredDays: requiredDays,       // 【动态】只算到今天
+    requiredDaysFull: requiredDaysFull, // 【整月】当月应出勤总天数（工资分母）
     workedRequiredDays: workedRequiredDays,
-    holidayAttendDays: holidayAttendDays,
-    attendDays: attendDays,
+    attendDays: attendDays,           // 【实际出勤】含节假日/周末加班的总到岗天数
+    holidayAttendDays: holidayAttendDays, // 法定节假日里出勤的天数（工资明细里单独提示用）
     rate: requiredDays ? Math.round(workedRequiredDays / requiredDays * 100) : 0
   };
 }
@@ -1193,32 +1311,36 @@ function renderStats(){
     title = view.year + ' 年全年统计';
   }
 
-  // 【动态应出勤的提示】判断统计区间是不是“还没过完”：
-  // 区间结束日 > 今天 => 还有没到的日子，此时应出勤只算到今天，卡片上标注“（截至今天）”。
-  // 看历史月份/年份（区间已全部过去）时，就用普通“天”，数字等于完整区间。
-  const rangeEnd = (viewMode === 'month')
-      ? new Date(view.year, view.month + 1, 0)  // 本月最后一天
-      : new Date(view.year, 11, 31);            // 本年 12 月 31 日
-  const capped = rangeEnd > new Date();
+  // 【两个应出勤口径并存】统计里会同时显示两行：
+  //   “截止今天应出勤” = 只数已经过去（含今天）的应出勤日，看得出“到目前为止该上几天班”；
+  //   “当月应出勤”（年视图叫“全年应出勤”） = 整个区间一共有多少个应出勤日，工资计算的分母用它。
 
   const cnt = stat.cnt;
 
-  // 【工资计算】预计工资 = 月薪 ÷ 应出勤天数 × 实际出勤天数。
-  // 只在“月视图 + 已填月薪 + 应出勤天数不为 0”时才计算（避免除以 0）；
-  // 年视图里的“应出勤”是全年天数，拿月薪套这个公式没有意义，所以年视图不显示工资卡。
+  // 【工资计算】口径固定为：月薪 ÷ 当月应出勤天数 × 实际出勤天数
+  //   - 应出勤天数（分母）用整月的，比如 2026 年 10 月是 18 天；
+  //   - 实际出勤天数（分子）含节假日/周末加班，所以有加班时工资会超过月薪。
+  // 年视图的应出勤是全年天数，拿月薪套这个公式没有意义，所以年视图不显示工资卡。
   let salaryItem = null;
   let salaryNote = '';
-  if (viewMode === 'month' && monthlySalary > 0 && stat.requiredDays > 0){
-    const pay = monthlySalary / stat.requiredDays * stat.attendDays; // 预计工资
+  if (viewMode === 'month' && monthlySalary > 0 && stat.requiredDaysFull > 0){
+    const pay = monthlySalary / stat.requiredDaysFull * stat.attendDays;   // 预计工资
     salaryItem = { k:'预计工资', v: fmtMoney(pay), u:'元' };
     salaryNote = '<div class="salary-note">工资明细：月薪 ' + fmtMoney(monthlySalary)
-               + ' 元 ÷ 应出勤 ' + stat.requiredDays + ' 天 × 实际出勤 ' + stat.attendDays
-               + ' 天 = <b>' + fmtMoney(pay) + ' 元</b></div>';
+               + ' 元 ÷ 当月应出勤 ' + stat.requiredDaysFull + ' 天 × 实际出勤 '
+               + stat.attendDays + ' 天 = <b>' + fmtMoney(pay) + ' 元</b></div>';
   }
 
+  // 年视图的“整月应出勤”要叫“全年应出勤”，避免文案对不上
+  const fullLabel = (viewMode === 'month') ? '当月' : '全年';
+
   const items = [
-    { k:'应出勤工作日', v:stat.requiredDays,  u: capped ? '天（截至今天）' : '天' },
-    { k:'实际出勤',     v:stat.attendDays,    u:'天' },
+    // 【合并卡片】前两行合成一个卡片：上面“截止今天”，下面“当月/全年”，共用一个标题
+    { group: [
+        { k:'截止今天', v:stat.requiredDays,     u:'天' },
+        { k:fullLabel,  v:stat.requiredDaysFull, u:'天' }
+    ] },
+    { k:'实际出勤',     v:stat.attendDays,    u:'天' }, // 含节假日/周末加班，是“真正干活的天数”
     { k:'出勤率',       v:stat.rate,          u:'%'  },
     { k:'加班',         v:stat.overtimeDays,  u:'天' },
     { k:'加班时长',     v:stat.overtimeHours, u:'小时' },
@@ -1229,10 +1351,23 @@ function renderStats(){
     { k:'休息',         v:cnt.rest,           u:'天' },
     { k:'未填写',       v:cnt.empty,          u:'天' }
   ];
-  if (salaryItem) items.splice(3, 0, salaryItem); // 把“预计工资”插在“出勤率”后面
+  if (salaryItem){
+    // 把“预计工资”插在“出勤率”后面（找下标而不是写死数字，前面加卡片也不受影响）
+    const rateIdx = items.findIndex(function(it){ return it.k === '出勤率'; });
+    items.splice(rateIdx + 1, 0, salaryItem);
+  }
 
   document.getElementById('statsTitle').textContent = title;
   document.getElementById('stats').innerHTML = items.map(function(it){
+    // 【合并卡片】有 group 字段的项，渲染成一个卡片里上下多行
+    if (it.group){
+      return '<div class="stat stat-merged"><div class="k">应出勤工作日</div>'
+           + it.group.map(function(g){
+               return '<div class="mrow"><b>' + g.v + '</b><small>' + g.u + '</small>'
+                    + '<span class="mk">' + g.k + '</span></div>';
+             }).join('')
+           + '</div>';
+    }
     return '<div class="stat"><div class="k">' + it.k + '</div>'
          + '<div class="v">' + it.v + '<small>' + it.u + '</small></div></div>';
   }).join('') + salaryNote;
@@ -1317,7 +1452,11 @@ function buildTipHtml(ds){
         + (ds === todayStr ? '（今天）' : '') + '</div>';
 
   // 状态：主状态名；法定假日显示成“法定休假（国庆节）”；有加班再追加“＋ 加班”
+  // 【缺勤】应出勤的工作日已经过去却还是空的，提示里也写“缺勤”，和格子上的红标签一致
   let state = st ? STATUS[st].label : '未填写';
+  if (!st && isRequiredWorkday(ds) && ds <= todayStr){
+    state = (makeupWorkSet.has(ds) ? '补班·缺勤' : '缺勤') + '（未填写）';  // 和格子上的红标签一致
+  }
   if (isHol && st === 'holiday') state = '法定休假（' + holidayMap[ds] + '）';
   if (ovt) state += ' ＋ 加班';
   h += '<div class="t-row">状态：<b>' + state + '</b></div>';
